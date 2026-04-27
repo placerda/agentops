@@ -1,8 +1,8 @@
 # AgentOps end-to-end demo workflow.
 #
-# Runs the offline CLI demo on every push and PR targeting the revamp branch
-# and on manual dispatch. Uploads the resulting evidence/ folder as a
-# downloadable artifact and writes a Markdown summary to the run page.
+# Manual-only: trigger via "Run workflow" on the Actions page.
+# Uploads the resulting evidence/ folder as a downloadable artifact and
+# writes a Markdown summary to the run page.
 #
 # This workflow does NOT contact Azure or Foundry. It validates the
 # CLI surface (init, eval run, eval run --baseline, report generate)
@@ -11,13 +11,6 @@
 name: E2E
 
 on:
-  push:
-    branches:
-      - feature/revamp-1.0
-  pull_request:
-    branches:
-      - feature/revamp-1.0
-      - develop
   workflow_dispatch:
 
 permissions:
