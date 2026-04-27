@@ -5,7 +5,6 @@ from typing import Annotated
 
 import typer
 
-from agentops.services.reporting import generate_report_from_results
 from agentops.utils.logging import get_logger, setup_logging
 
 app = typer.Typer(
@@ -126,65 +125,30 @@ def cmd_init(
         "--path",
         help="Workspace directory to initialise.",
     ),
-    flat: bool = typer.Option(
-        False,
-        "--flat",
-        help="Use the 1.0 minimal layout (agentops.yaml at project root + .agentops/data/smoke.jsonl).",
-    ),
 ) -> None:
     """Initialise an AgentOps workspace.
 
-    The default layout creates a full ``.agentops/`` workspace (legacy). Pass
-    ``--flat`` to bootstrap the simpler 1.0 layout — a single
-    ``agentops.yaml`` at the project root and a tiny seed dataset.
+    Bootstraps the 1.0 minimal layout: a single ``agentops.yaml`` at the
+    project root and a tiny seed dataset under ``.agentops/data/smoke.jsonl``.
     """
-    if flat:
-        from agentops.services.initializer import initialize_flat_workspace
-
-        log.debug("cmd_init flat=True force=%s dir=%s", force, directory)
-        try:
-            result = initialize_flat_workspace(directory=directory, force=force)
-        except Exception as exc:
-            typer.echo(f"Error: failed to initialize workspace: {exc}", err=True)
-            raise typer.Exit(code=1) from exc
-
-        typer.echo("Initialized AgentOps 1.0 workspace.")
-        for created in result.created_files:
-            typer.echo(f" + created {created}")
-        for overwritten in result.overwritten_files:
-            typer.echo(f" ~ overwritten {overwritten}")
-        for skipped in result.skipped_files:
-            typer.echo(f" - skipped {skipped}")
-        typer.echo("")
-        typer.echo("Edit agentops.yaml to point at your agent, then run: agentops eval run")
-        return
-
-    from agentops.services.initializer import initialize_workspace
+    from agentops.services.initializer import initialize_flat_workspace
 
     log.debug("cmd_init called force=%s dir=%s", force, directory)
     try:
-        result = initialize_workspace(directory=directory, force=force)
+        result = initialize_flat_workspace(directory=directory, force=force)
     except Exception as exc:
         typer.echo(f"Error: failed to initialize workspace: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"Initialized workspace: {result.workspace_dir}")
-    typer.echo(
-        "Summary: "
-        f"created_dirs={len(result.created_dirs)}, "
-        f"created_files={len(result.created_files)}, "
-        f"overwritten_files={len(result.overwritten_files)}, "
-        f"skipped_files={len(result.skipped_files)}"
-    )
-
+    typer.echo("Initialized AgentOps workspace.")
     for created in result.created_files:
         typer.echo(f" + created {created}")
     for overwritten in result.overwritten_files:
         typer.echo(f" ~ overwritten {overwritten}")
     for skipped in result.skipped_files:
         typer.echo(f" - skipped {skipped}")
-
     typer.echo("")
+    typer.echo("Edit agentops.yaml to point at your agent, then run: agentops eval run")
     typer.echo("To install coding agent skills, run: agentops skills install")
 
 
@@ -200,8 +164,7 @@ def cmd_eval_run(
         typer.Option(
             "--config",
             "-c",
-            help="Path to agentops.yaml (1.0) or run.yaml (legacy). "
-            "Defaults: agentops.yaml, then .agentops/run.yaml.",
+            help="Path to agentops.yaml. Defaults to ./agentops.yaml.",
         ),
     ] = None,
     output: Annotated[
@@ -212,14 +175,14 @@ def cmd_eval_run(
         Path | None,
         typer.Option(
             "--baseline",
-            help="Path to a previous results.json to compare this run against (1.0 only).",
+            help="Path to a previous results.json to compare this run against.",
         ),
     ] = None,
     report_format: Annotated[
         str, typer.Option("--format", "-f", help="Report format: md, html, or all.")
     ] = "md",
 ) -> None:
-    """Run an evaluation defined in agentops.yaml (1.0) or run.yaml (legacy)."""
+    """Run an evaluation defined in agentops.yaml."""
     if report_format not in ("md", "html", "all"):
         typer.echo("Error: --format must be md, html, or all.", err=True)
         raise typer.Exit(code=1)
@@ -233,71 +196,25 @@ def cmd_eval_run(
         baseline,
     )
 
-    if _is_flat_schema(config_path):
-        _run_flat_schema_eval(
-            config_path=config_path,
-            output=output,
-            baseline=baseline,
-        )
-        return
-
-    if baseline is not None:
+    if not config_path.exists():
         typer.echo(
-            "Error: --baseline is only supported with the 1.0 agentops.yaml schema.",
+            f"Error: config not found at {config_path}. "
+            "Run `agentops init` to scaffold a starter agentops.yaml.",
             err=True,
         )
         raise typer.Exit(code=1)
 
-    from agentops.services.runner import run_evaluation as legacy_run_evaluation
-
-    try:
-        run_result = legacy_run_evaluation(
-            config_path=config_path,
-            output_override=output,
-            report_format=report_format,
-        )
-    except Exception as exc:
-        typer.echo(f"Error: evaluation failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-
-    typer.echo(f"Evaluation output directory: {run_result.output_dir}")
-    typer.echo(f"results.json: {run_result.results_path}")
-    typer.echo(f"report: {run_result.report_path}")
-
-    if run_result.exit_code == 2:
-        typer.echo("Threshold status: FAILED")
-        raise typer.Exit(code=2)
-
-    typer.echo("Threshold status: PASSED")
+    _run_flat_schema_eval(
+        config_path=config_path,
+        output=output,
+        baseline=baseline,
+    )
 
 
 def _resolve_eval_config_path(config: Path | None) -> Path:
     if config is not None:
         return config
-    flat = Path("agentops.yaml")
-    if flat.exists():
-        return flat
-    return Path(".agentops/run.yaml")
-
-
-def _is_flat_schema(config_path: Path) -> bool:
-    """Return True when config_path is a 1.0 agentops.yaml file."""
-    if not config_path.exists():
-        return False
-    try:
-        from agentops.utils.yaml import load_yaml
-    except ImportError:
-        return False
-    try:
-        data = load_yaml(config_path)
-    except Exception:
-        return False
-    if not isinstance(data, dict):
-        return False
-    # Flat schema markers: 'agent' (string) at top-level, no legacy 'target'/'bundle'.
-    if "target" in data or "bundle" in data:
-        return False
-    return isinstance(data.get("agent"), str)
+    return Path("agentops.yaml")
 
 
 def _run_flat_schema_eval(
@@ -382,7 +299,7 @@ def _regenerate_flat_report(
 
     if report_format not in ("md", "all"):
         raise ValueError(
-            "flat-pipeline results only support --format md (got %r)" % report_format
+            "Only --format md is supported (got %r)" % report_format
         )
     payload = _json.loads(results_path.read_text(encoding="utf-8"))
     result = RunResult.model_validate(payload)
@@ -414,12 +331,12 @@ def cmd_report_generate(
         typer.Option("--out", help="Output path for report."),
     ] = None,
     report_format: Annotated[
-        str, typer.Option("--format", "-f", help="Report format: md, html, or all.")
+        str, typer.Option("--format", "-f", help="Report format: md (default).")
     ] = "md",
 ) -> None:
-    """Regenerate report from a results.json file."""
-    if report_format not in ("md", "html", "all"):
-        typer.echo("Error: --format must be md, html, or all.", err=True)
+    """Regenerate report.md from a results.json file."""
+    if report_format not in ("md", "all"):
+        typer.echo("Error: --format must be md or all.", err=True)
         raise typer.Exit(code=1)
 
     resolved_results_in = results_in or DEFAULT_REPORT_INPUT
@@ -430,23 +347,22 @@ def cmd_report_generate(
         report_format,
     )
 
-    if _is_flat_results(resolved_results_in):
-        try:
-            output_path = _regenerate_flat_report(
-                results_path=resolved_results_in,
-                output_path=report_out,
-                report_format=report_format,
-            )
-        except Exception as exc:
-            typer.echo(f"Error: report generation failed: {exc}", err=True)
-            raise typer.Exit(code=1) from exc
+    if not resolved_results_in.exists():
+        typer.echo(
+            f"Error: results not found at {resolved_results_in}.", err=True
+        )
+        raise typer.Exit(code=1)
 
-        typer.echo(f"Loaded results: {resolved_results_in}")
-        typer.echo(f"Generated report: {output_path}")
-        return
+    if not _is_flat_results(resolved_results_in):
+        typer.echo(
+            f"Error: {resolved_results_in} is not an AgentOps 1.0 results.json. "
+            "Re-run `agentops eval run` to regenerate it.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     try:
-        report_result = generate_report_from_results(
+        output_path = _regenerate_flat_report(
             results_path=resolved_results_in,
             output_path=report_out,
             report_format=report_format,
@@ -455,10 +371,8 @@ def cmd_report_generate(
         typer.echo(f"Error: report generation failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"Loaded results: {report_result.input_results_path}")
-    typer.echo(f"Generated report: {report_result.output_report_path}")
-    if report_result.html_report_path:
-        typer.echo(f"Generated report: {report_result.html_report_path}")
+    typer.echo(f"Loaded results: {resolved_results_in}")
+    typer.echo(f"Generated report: {output_path}")
 
 
 # ---------------------------------------------------------------------------

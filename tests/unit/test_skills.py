@@ -242,7 +242,7 @@ def test_cli_init_does_not_install_skills(tmp_path: Path) -> None:
     result = runner.invoke(app, ["init", "--dir", str(tmp_path)])
 
     assert result.exit_code == 0
-    assert "Initialized workspace" in result.stdout
+    assert "Initialized AgentOps workspace" in result.stdout
     assert "agentops skills install" in result.stdout
 
     # Skills should NOT be created during init
