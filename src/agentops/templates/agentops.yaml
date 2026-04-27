@@ -1,0 +1,26 @@
+# AgentOps configuration — 1.0 flat schema.
+#
+# The four required fields are 'version', 'agent', 'dataset', and (optionally)
+# 'thresholds'. AgentOps infers evaluators from the agent type and dataset
+# columns, so most users only need this much.
+#
+# Examples:
+#
+#   agent: "my-rag:3"                      # Foundry prompt agent (name:version)
+#   agent: "https://...foundry.../agents/" # Foundry hosted endpoint
+#   agent: "https://api.example.com/chat"  # any HTTP/JSON agent (ACA, AKS, custom)
+#   agent: "model:gpt-4o"                  # raw Foundry model deployment
+
+version: 1
+
+agent: "my-agent:1"
+
+dataset: .agentops/data/smoke.jsonl
+
+# Optional. Override the auto-selected pass/fail thresholds. AgentOps fills in
+# sensible defaults for the metrics that are auto-selected.
+#
+# thresholds:
+#   coherence: ">=3"
+#   groundedness: ">=3"
+#   avg_latency_seconds: "<=10"

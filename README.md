@@ -49,7 +49,68 @@ Exit code contract:
 - `2` execution succeeded but one or more thresholds failed
 - `1` runtime or configuration error
 
-## Quickstart
+## Quickstart (1.0)
+
+> The 1.0 release introduces a flat, three-line config for the most common case. The legacy multi-file workspace is still supported — see [`docs/how-it-works.md`](docs/how-it-works.md) for details.
+
+### 1) Install
+
+```bash
+python -m venv .venv
+python -m pip install -U pip
+python -m pip install agentops-toolkit
+```
+
+### 2) Bootstrap
+
+```bash
+agentops init --flat
+```
+
+This writes a single `agentops.yaml` at the project root and a tiny seed dataset at `.agentops/data/smoke.jsonl`. Edit `agentops.yaml` to point at your agent.
+
+### 3) Configure your agent
+
+Pick one of these forms for the `agent:` field — AgentOps classifies the target automatically:
+
+```yaml
+agent: "my-rag:3"                          # Foundry prompt agent (name:version)
+agent: "https://...services.ai.azure.com/.../agents/<id>"  # Foundry hosted endpoint
+agent: "https://api.example.com/chat"      # any HTTP/JSON agent (ACA, AKS, custom)
+agent: "model:gpt-4o"                       # raw Foundry model deployment
+```
+
+Evaluators are inferred from the dataset shape (rows with `context` → RAG evaluators, rows with `tool_calls`/`tool_definitions` → agent-workflow evaluators). The full minimal config is:
+
+```yaml
+version: 1
+agent: "my-rag:3"
+dataset: .agentops/data/smoke.jsonl
+```
+
+### 4) Run
+
+```bash
+export AZURE_AI_FOUNDRY_PROJECT_ENDPOINT="https://<resource>.services.ai.azure.com/api/projects/<project>"
+agentops eval run
+```
+
+Outputs land in `.agentops/results/latest/`:
+
+- `results.json` — machine-readable (versioned, stable schema)
+- `report.md` — human-readable, PR-friendly
+
+To compare against a previous run, pass `--baseline`:
+
+```bash
+agentops eval run --baseline .agentops/results/baseline/results.json
+```
+
+The report grows a `Comparison vs Baseline` section with per-metric deltas.
+
+---
+
+## Quickstart (legacy multi-file layout)
 
 <p align="center">
 <img alt="Quickstart demo: agentops init and eval run" src="https://github.com/Azure/agentops/raw/main/media/quickstart.gif"/>

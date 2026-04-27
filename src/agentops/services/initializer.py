@@ -95,3 +95,48 @@ def initialize_workspace(directory: Path, force: bool = False) -> InitResult:
             result.created_files.append(file_path)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# 1.0 flat workspace (agentops.yaml at project root + minimal seed dataset)
+# ---------------------------------------------------------------------------
+
+
+_FLAT_FILES: Dict[str, str] = {
+    "agentops.yaml": "agentops.yaml",
+    ".agentops/data/smoke.jsonl": "smoke.jsonl",
+}
+
+
+def initialize_flat_workspace(directory: Path, force: bool = False) -> InitResult:
+    """Bootstrap the AgentOps 1.0 workspace.
+
+    Creates ``agentops.yaml`` at the project root and a tiny seed dataset at
+    ``.agentops/data/smoke.jsonl``. This is the recommended starting point for
+    new projects; the legacy multi-file workspace remains available via
+    :func:`initialize_workspace`.
+    """
+    project_root = directory.resolve()
+    result = InitResult(workspace_dir=project_root / ".agentops")
+
+    templates_root = files(_TEMPLATE_PACKAGE)
+    for relative_path, template_name in _FLAT_FILES.items():
+        target = project_root / relative_path
+        existed_before = target.exists()
+        if existed_before and not force:
+            result.skipped_files.append(target)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.parent.exists():
+            result.created_dirs.append(target.parent)
+
+        content = templates_root.joinpath(template_name).read_text(encoding="utf-8")
+        target.write_text(content, encoding="utf-8")
+
+        if existed_before:
+            result.overwritten_files.append(target)
+        else:
+            result.created_files.append(target)
+
+    return result

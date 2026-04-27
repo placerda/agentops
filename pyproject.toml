@@ -27,6 +27,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "agentops.templates" = [
+  "agentops.yaml",
+  "smoke.jsonl",
   "config.yaml",
   "run.yaml",
   "run-rag.yaml",

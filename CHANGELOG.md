@@ -3,6 +3,31 @@
 All notable changes to this project will be documented in this file.
 This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
 
+# Changelog
+
+All notable changes to this project will be documented in this file.
+This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
+
+## [Unreleased] — 1.0 revamp
+
+### Added
+- **Flat `agentops.yaml` schema** — a three-line minimal config (`version`, `agent`, `dataset`) that replaces the multi-file `run.yaml` + `bundle.yaml` + `dataset.yaml` for the common case. Implemented in `src/agentops/core/agentops_config.py`.
+- **Automatic target classification** — the `agent:` value is classified as `foundry_prompt` (`name:version`), `foundry_hosted` (`https://...services.ai.azure.com/...`), `http_json` (any other URL), or `model_direct` (`model:<deployment>`).
+- **Automatic evaluator inference** — evaluators are picked from the target type and the dataset shape (presence of `context`, `tool_calls`, `tool_definitions`). The `scenario` concept is gone from the user-facing surface. Implemented in `src/agentops/core/evaluators.py`.
+- **New `pipeline/` namespace** — `orchestrator.py`, `invocations.py`, `runtime.py`, `thresholds.py`, `comparison.py`, `reporter.py`. Single end-to-end pipeline that supports all four target kinds, including Foundry hosted endpoints (Responses + Invocations protocols).
+- **`agentops eval run --baseline <results.json>`** — compare a run against any previous `results.json` and append a `Comparison vs Baseline` table to the report.
+- **`agentops init --flat`** — bootstrap a 1.0 workspace (root `agentops.yaml` + seed dataset). The legacy multi-file workspace remains available as the default for backward compatibility.
+- **Tutorial: 1.0 quickstart** — `docs/tutorial-1.0-quickstart.md`.
+
+### Changed
+- **`agentops eval run`** auto-detects the schema and routes flat configs through the new pipeline; legacy `run.yaml` files continue to work unchanged.
+- **GitHub Actions workflow template** now defaults to `agentops.yaml` (falls back to `.agentops/run.yaml`).
+- **README** gains a 1.0 Quickstart section before the legacy quickstart.
+
+### Engineering
+- 326 unit + integration tests passing (was 319 before the revamp). New end-to-end smoke covers the HTTP backend without requiring Azure credentials.
+- Foundry SDK calls remain lazy and never pass `api_version` to `get_openai_client()`.
+
 ## [0.1.7] - 2026-04-21
 
 ### Added

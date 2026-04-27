@@ -24,9 +24,9 @@ on:
   workflow_dispatch:
     inputs:
       config:
-        description: "Path to run.yaml (default: .agentops/run.yaml)"
+        description: "Path to agentops.yaml or run.yaml (default: agentops.yaml)"
         required: false
-        default: ".agentops/run.yaml"
+        default: "agentops.yaml"
       output:
         description: "Output directory for results"
         required: false
@@ -77,7 +77,14 @@ jobs:
       - name: Resolve config path
         id: config
         run: |
-          CONFIG="${{ github.event.inputs.config || '.agentops/run.yaml' }}"
+          CONFIG="${{ github.event.inputs.config }}"
+          if [ -z "$CONFIG" ]; then
+            if [ -f "agentops.yaml" ]; then
+              CONFIG="agentops.yaml"
+            else
+              CONFIG=".agentops/run.yaml"
+            fi
+          fi
           echo "path=$CONFIG" >> "$GITHUB_OUTPUT"
 
       - name: Resolve output directory
