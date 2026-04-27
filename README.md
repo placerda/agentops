@@ -19,24 +19,15 @@ AgentOps CLI for evaluation, observability, and operational workflows for Micros
 
 ## Overview
 
-AgentOps Toolkit is a CLI built on Microsoft Foundry that standardizes evaluation and operational workflows for AI agents and models, helping teams run, monitor, and automate AgentOps processes.
+AgentOps Toolkit is a CLI built on Microsoft Foundry that standardizes evaluation workflows for AI agents and models, helping teams run and automate evaluations with consistent inputs and outputs.
 
 The project enables:
 
 - Consistent local and CI execution of agent evaluations
-- Reusable evaluation policies through bundles
-- Operational observability through tracing, monitoring, and run inspection
+- Automatic evaluator selection based on dataset shape (RAG, agent-with-tools, model quality)
 - Stable machine-readable outputs for automation
 - Human-readable reports for PR reviews and quality gates
-
-Operational capabilities include:
-
-- Standardized evaluation workflows
-- Run history and result inspection
-- Tracing and observability
-- Monitoring (dashboards and alerts)
-- CI/CD automation
-- Operational reporting and analysis
+- Baseline comparison to detect regressions across runs
 
 Core outputs:
 
@@ -49,9 +40,7 @@ Exit code contract:
 - `2` execution succeeded but one or more thresholds failed
 - `1` runtime or configuration error
 
-## Quickstart (1.0)
-
-> The 1.0 release introduces a flat, three-line config for the most common case. The legacy multi-file workspace is still supported — see [`docs/how-it-works.md`](docs/how-it-works.md) for details.
+## Quickstart
 
 ### 1) Install
 
@@ -112,47 +101,21 @@ The report grows a `Comparison vs Baseline` section with per-metric deltas.
 
 ## Commands
 
-| Command | Description | Status |
-|---|---|---|
-| `agentops --version` | Show installed version | ✅ |
-| `agentops init [--path DIR]` | Scaffold project workspace, starter files, and coding agent skills | ✅ |
-| `agentops eval run [--config PATH]` | Evaluate a dataset against a bundle | ✅ |
-| `agentops eval compare --runs ID1,ID2` | Compare two past runs | ✅ |
-| `agentops report generate [--in FILE]` | Regenerate `report.md` from `results.json` | ✅ |
-| `agentops workflow generate` | Generate GitHub Actions workflow | ✅ |
-| `agentops skills install [--platform <p>]` | Install coding agent skills (Copilot, Claude) | ✅ |
-| `agentops run list\|show` | List or inspect past runs | 🚧 |
-| `agentops bundle list\|show` | Browse bundle catalog | 🚧 |
-| `agentops dataset validate\|describe` | Dataset utilities | 🚧 |
-| `agentops trace init` | Tracing setup | 🚧 |
-| `agentops monitor setup\|show\|configure` | Monitoring operations | 🚧 |
-
-Planned commands return a friendly message indicating they are not yet implemented.
+| Command | Description |
+|---|---|
+| `agentops --version` | Show installed version |
+| `agentops init --flat` | Bootstrap `agentops.yaml` and a seed dataset |
+| `agentops eval run [--config PATH] [--baseline PATH]` | Run an evaluation |
+| `agentops report generate [--in FILE]` | Regenerate `report.md` from `results.json` |
+| `agentops workflow generate` | Generate GitHub Actions workflow |
+| `agentops skills install [--platform <p>]` | Install coding agent skills (Copilot, Claude) |
 
 ## Documentation
 
-### Concepts and Architecture
-
-- [Concepts](https://github.com/Azure/agentops/blob/main/docs/concepts.md) — bundles, datasets, evaluators, backends, configuration model
-- [How It Works](https://github.com/Azure/agentops/blob/main/docs/how-it-works.md) — architecture, request flow, full schema reference
-- [Bundles](https://github.com/Azure/agentops/blob/main/docs/bundles.md) — bundle authoring and evaluator configuration
-
-### Tutorials
-
-- [Model-direct evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-model-direct.md)
-- [Foundry agent evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-basic-foundry-agent.md)
-- [RAG evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-rag.md)
-- [HTTP-deployed agent evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-http-agent.md)
-- [Conversational agent evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-conversational-agent.md)
-- [Agent workflow evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-agent-workflow.md)
-- [Baseline comparison](https://github.com/Azure/agentops/blob/main/docs/tutorial-baseline-comparison.md)
-
-### Operations
-
+- [Quickstart tutorial](https://github.com/Azure/agentops/blob/main/docs/tutorial-quickstart.md)
 - [CI/CD with GitHub Actions](https://github.com/Azure/agentops/blob/main/docs/ci-github-actions.md)
-- [Copilot skills installation](https://github.com/Azure/agentops/blob/main/docs/tutorial-copilot-skills.md)
-- [Release process](https://github.com/Azure/agentops/blob/main/docs/release-process.md)
 - [Built-in evaluator reference](https://github.com/Azure/agentops/blob/main/docs/foundry-evaluation-sdk-built-in-evaluators.md)
+- [Release process](https://github.com/Azure/agentops/blob/main/docs/release-process.md)
 
 ## Contributing
 

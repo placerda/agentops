@@ -1,6 +1,6 @@
-# Tutorial: 1.0 minimal quickstart
+# Tutorial: minimal quickstart
 
-This tutorial covers the simplest end-to-end AgentOps 1.0 flow: bootstrap a workspace, point it at any agent, and run an evaluation.
+This tutorial covers the simplest end-to-end AgentOps flow: bootstrap a workspace, point it at any agent, and run an evaluation.
 
 ## What you will build
 
