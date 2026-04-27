@@ -8,6 +8,7 @@ from typing import Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from agentops.core.agentops_config import AgentOpsConfig
 from agentops.core.models import (
     BundleConfig,
     BundleRef,
@@ -29,6 +30,11 @@ def _load_model(path: Path, model_cls: Type[TModel], label: str) -> TModel:
         return model_cls.model_validate(data)
     except ValidationError as exc:
         raise ValueError(f"{label} validation error: {exc}") from exc
+
+
+def load_agentops_config(path: Path) -> AgentOpsConfig:
+    """Load the flat 1.0 ``agentops.yaml`` schema."""
+    return _load_model(path, AgentOpsConfig, "AgentOpsConfig")
 
 
 def load_workspace_config(path: Path) -> WorkspaceConfig:
