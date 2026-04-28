@@ -13,8 +13,7 @@ user-facing ``scenario`` concept. Evaluators are picked from two inputs:
    * If rows include ``context``: add RAG evaluators (Groundedness,
      Retrieval, Relevance, ResponseCompleteness).
    * If rows include ``tool_calls`` or ``tool_definitions``: add agent
-     evaluators (TaskCompletion, ToolCallAccuracy, IntentResolution,
-     TaskAdherence, ToolSelection, ToolInputAccuracy).
+     evaluators (ToolCallAccuracy, IntentResolution, TaskAdherence).
 
 The :func:`select_evaluators` function returns a list of resolved
 :class:`EvaluatorPreset` objects. Each preset carries its class name, the
@@ -163,20 +162,6 @@ _RAG_EVALUATORS: Tuple[EvaluatorPreset, ...] = (
 
 
 _TOOL_USE_EVALUATORS: Tuple[EvaluatorPreset, ...] = (
-    EvaluatorPreset(
-        name="TaskCompletionEvaluator",
-        class_name="TaskCompletionEvaluator",
-        score_key="task_completion",
-        input_mapping={
-            "query": "$prompt",
-            "response": "$prediction",
-            "tool_calls": "$tool_calls",
-            "tool_definitions": "$tool_definitions",
-        },
-        default_threshold=_t("task_completion", ">=", 3.0),
-        categories=frozenset({"agent"}),
-        agent_only=True,
-    ),
     EvaluatorPreset(
         name="ToolCallAccuracyEvaluator",
         class_name="ToolCallAccuracyEvaluator",

@@ -30,9 +30,6 @@ _AI_ASSISTED = {
     "IntentResolutionEvaluator",
     "TaskAdherenceEvaluator",
     "ToolCallAccuracyEvaluator",
-    "TaskCompletionEvaluator",
-    "ToolSelectionEvaluator",
-    "ToolInputAccuracyEvaluator",
 }
 
 # Evaluator classes that require ``azure_ai_project``.

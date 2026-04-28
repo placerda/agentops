@@ -129,7 +129,7 @@ class TestSelectEvaluators:
         result = select_evaluators(_PROMPT_AGENT, _shape())
         names = [p.name for p in result]
         assert "GroundednessEvaluator" not in names
-        assert "TaskCompletionEvaluator" not in names
+        assert "ToolCallAccuracyEvaluator" not in names
 
     def test_rag_evaluators_added_with_context(self) -> None:
         result = select_evaluators(_PROMPT_AGENT, _shape(context=True))
@@ -145,19 +145,19 @@ class TestSelectEvaluators:
     def test_tool_use_added_with_tool_calls(self) -> None:
         result = select_evaluators(_PROMPT_AGENT, _shape(tool_calls=True))
         names = [p.name for p in result]
-        assert "TaskCompletionEvaluator" in names
+        assert "ToolCallAccuracyEvaluator" in names
         assert "ToolCallAccuracyEvaluator" in names
 
     def test_tool_use_added_with_tool_definitions(self) -> None:
         result = select_evaluators(_PROMPT_AGENT, _shape(tool_defs=True))
         names = [p.name for p in result]
-        assert "TaskCompletionEvaluator" in names
+        assert "ToolCallAccuracyEvaluator" in names
 
     def test_combined_rag_and_tools(self) -> None:
         result = select_evaluators(_PROMPT_AGENT, _shape(context=True, tool_calls=True))
         names = [p.name for p in result]
         assert "GroundednessEvaluator" in names
-        assert "TaskCompletionEvaluator" in names
+        assert "ToolCallAccuracyEvaluator" in names
 
     def test_model_direct_skips_agent_evaluators(self) -> None:
         # Even if the dataset has context/tool_calls, model targets stay quality-only.
@@ -166,7 +166,7 @@ class TestSelectEvaluators:
         )
         names = [p.name for p in result]
         assert "GroundednessEvaluator" not in names
-        assert "TaskCompletionEvaluator" not in names
+        assert "ToolCallAccuracyEvaluator" not in names
         assert "CoherenceEvaluator" in names
 
     def test_http_agent_treated_like_agent(self) -> None:

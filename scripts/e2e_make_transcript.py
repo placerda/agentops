@@ -94,8 +94,29 @@ def main() -> int:
     out_path = scenario_dir / "transcript.txt"
 
     if not results_path.exists():
-        print(f"results.json not found at {results_path}", file=sys.stderr)
-        return 1
+        # Eval did not produce a results.json (likely the run failed before
+        # the reporter wrote it). Still emit a transcript with the header so
+        # the artifact upload has something useful to inspect.
+        header = (
+            header_path.read_text(encoding="utf-8")
+            if header_path.exists()
+            else f"# Scenario: {scenario_dir.name}\n"
+        )
+        out_path.write_text(
+            header
+            + "\n"
+            + SECTION
+            + "\n"
+            + "VERDICT: NO RESULTS\n"
+            + f"results.json not found at {results_path}\n"
+            + "The evaluation run did not complete successfully. Check the\n"
+            + "job logs (Run AgentOps eval step) for the underlying error.\n"
+            + SECTION
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"transcript (no-results) written to {out_path}")
+        return 0
 
     results = json.loads(results_path.read_text(encoding="utf-8"))
     header = (
