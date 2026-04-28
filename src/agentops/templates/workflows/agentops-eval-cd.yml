@@ -46,6 +46,8 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.11"
+  # Silence Node.js 20 deprecation warnings from azure/login@v2 until a Node24-compatible version ships.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ------------------------------------------------------------------
@@ -63,7 +65,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -73,7 +75,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: "pip"
@@ -111,7 +113,7 @@ jobs:
 
       - name: Upload evaluation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agentops-cd-safety-results
           path: |
@@ -138,7 +140,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # ================================================================
       # TODO: Add your deployment steps here.
