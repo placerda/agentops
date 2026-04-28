@@ -454,3 +454,7 @@ plugins/agentops/icon.png
 *.msp
 
 evidence/
+
+logs.txt
+.last_run
+

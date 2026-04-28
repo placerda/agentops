@@ -101,7 +101,7 @@ agent: {aca_url}
 dataset: ../../{rel_basic}
 protocol: http-json
 request_field: message
-response_field: body.message
+response_field: json.message
 """,
         )
         written.append("http-aca")

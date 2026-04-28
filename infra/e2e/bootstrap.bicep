@@ -28,8 +28,8 @@ param prefix string = 'agentopse2e'
 
 @description('Capacity (TPM, in thousands of tokens per minute) for the gpt-4o-mini deployment.')
 @minValue(1)
-@maxValue(50)
-param modelCapacity int = 10
+@maxValue(500)
+param modelCapacity int = 100
 
 @description('Model deployment name surfaced to AgentOps as model:<name>.')
 param modelDeploymentName string = 'gpt-4o-mini'
