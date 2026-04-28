@@ -76,6 +76,13 @@ def render() -> list[str]:
             f"""version: 1
 agent: {prompt_agent}
 dataset: ../../{rel_basic}
+# Permissive thresholds: e2e is a smoke test for the pipeline, not a quality gate.
+thresholds:
+  coherence: ">=1"
+  fluency: ">=1"
+  similarity: ">=1"
+  f1_score: ">=0"
+  avg_latency_seconds: "<=60"
 """,
         )
         written.append("foundry-prompt")
@@ -88,12 +95,24 @@ dataset: ../../{rel_basic}
 agent: {hosted_url}
 dataset: ../../{rel_rag}
 protocol: responses
+thresholds:
+  coherence: ">=1"
+  fluency: ">=1"
+  similarity: ">=1"
+  groundedness: ">=1"
+  relevance: ">=1"
+  retrieval: ">=1"
+  response_completeness: ">=1"
+  f1_score: ">=0"
+  avg_latency_seconds: "<=60"
 """,
         )
         written.append("foundry-hosted")
 
     aca_url = os.environ.get("AGENTOPS_E2E_ACA_URL")
     if aca_url:
+        # The echo container does not produce real answers; use an explicit
+        # evaluators list so we only assert the round-trip and latency.
         _write(
             "http-aca",
             f"""version: 1
@@ -102,6 +121,10 @@ dataset: ../../{rel_basic}
 protocol: http-json
 request_field: message
 response_field: json.message
+evaluators:
+  - name: avg_latency_seconds
+thresholds:
+  avg_latency_seconds: "<=60"
 """,
         )
         written.append("http-aca")
@@ -113,6 +136,12 @@ response_field: json.message
             f"""version: 1
 agent: model:{model_deployment}
 dataset: ../../{rel_basic}
+thresholds:
+  coherence: ">=1"
+  fluency: ">=1"
+  similarity: ">=1"
+  f1_score: ">=0"
+  avg_latency_seconds: "<=60"
 """,
         )
         written.append("model-direct")
