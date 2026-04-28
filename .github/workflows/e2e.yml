@@ -210,7 +210,7 @@ jobs:
         env:
           AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ vars.AZURE_E2E_FOUNDRY_PROJECT_ENDPOINT }}
         working-directory: e2e-runs/foundry-prompt
-        run: uv run agentops eval --config agentops.yaml
+        run: uv run agentops eval run --config agentops.yaml
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -221,7 +221,7 @@ jobs:
 
   live-foundry-hosted:
     needs: bootstrap-live
-    if: ${{ github.event.inputs.scenarios == 'all' || github.event.inputs.scenarios == 'foundry-hosted' }}
+    if: ${{ (github.event.inputs.scenarios == 'all' || github.event.inputs.scenarios == 'foundry-hosted') && vars.AGENTOPS_E2E_FOUNDRY_HOSTED_URL != '' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -250,7 +250,7 @@ jobs:
         env:
           AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ vars.AZURE_E2E_FOUNDRY_PROJECT_ENDPOINT }}
         working-directory: e2e-runs/foundry-hosted
-        run: uv run agentops eval --config agentops.yaml
+        run: uv run agentops eval run --config agentops.yaml
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -282,7 +282,7 @@ jobs:
         run: uv run python scripts/e2e_render_config.py
       - name: Run AgentOps eval
         working-directory: e2e-runs/http-aca
-        run: uv run agentops eval --config agentops.yaml
+        run: uv run agentops eval run --config agentops.yaml
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -322,7 +322,7 @@ jobs:
         env:
           AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ vars.AZURE_E2E_FOUNDRY_PROJECT_ENDPOINT }}
         working-directory: e2e-runs/model-direct
-        run: uv run agentops eval --config agentops.yaml
+        run: uv run agentops eval run --config agentops.yaml
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -371,3 +371,4 @@ jobs:
             echo "Deleting stale app: $app"
             az containerapp delete -g "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" -n "$app" --yes || true
           done
+
