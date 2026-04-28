@@ -206,8 +206,11 @@ this is a pipeline smoke test, not a quality gate.
 
     aca_url = os.environ.get("AGENTOPS_E2E_ACA_URL")
     if aca_url:
-        # The echo container does not produce real answers; use an explicit
-        # evaluators list so we only assert the round-trip and latency.
+        # The hello-agent ACA app is a real LLM-backed agent (Microsoft Agent
+        # Framework + Azure OpenAI gpt-4o-mini), so we exercise the regular
+        # quality evaluators here. Thresholds are permissive — this is a
+        # smoke test of the http-json invocation path against a real model,
+        # not a quality gate for gpt-4o-mini itself.
         _write(
             "http-aca",
             f"""version: 1
@@ -215,29 +218,53 @@ agent: {aca_url}
 dataset: ../../{rel_basic}
 protocol: http-json
 request_field: message
-response_field: json.message
+response_field: text
 evaluators:
+  - name: similarity
+  - name: coherence
+  - name: fluency
+  - name: f1_score
   - name: avg_latency_seconds
 thresholds:
+  similarity: ">=0"
+  coherence: ">=0"
+  fluency: ">=0"
+  f1_score: ">=0"
   avg_latency_seconds: "<=60"
 """,
             header=f"""# Scenario: http-aca
 
-**Target:** A small echo Container App provisioned per run by
-`infra/e2e/perrun.bicep` at `{aca_url}`.
+**Target:** A *real* Microsoft Agent Framework chat agent
+(`agent_framework.Agent` + `OpenAIChatCompletionClient` against Azure
+OpenAI `gpt-4o-mini`) deployed as an Azure Container App per workflow
+run by `infra/e2e/perrun.bicep` at `{aca_url}`.
 
-**What it does:** It is *not* a real model — it is a deliberately dumb HTTP
-echo service (FastAPI / built-in handler) that returns the request body's
-`message` field back as the response. The point is to validate the AgentOps
-HTTP-JSON invocation path end to end (POST a JSON body, parse a JSON
-response with a configurable dot-path, and round-trip latency) against a
-freshly-deployed Azure resource the workflow itself owns.
+**What it does:** The agent (see `infra/e2e/agent-app/app.py`) is a small
+FastAPI service that exposes `POST /` accepting `{{"message": "..."}}`
+and returning `{{"text": "..."}}`. It runs the user's question through a
+single-turn `Agent.run()` call with the instructions:
 
-**Dataset:** `{rel_basic}` (3 short factual rows). Because the echo agent
-cannot answer correctly, only `avg_latency_seconds` is enabled — every
-quality evaluator would deterministically fail.
+> *You are a concise factual assistant. Answer the user's question in one
+> short sentence. Do not add caveats, disclaimers, or follow-up questions.*
 
-**Evaluators:** `avg_latency_seconds` only.
+The container authenticates to Azure OpenAI via a User-Assigned Managed
+Identity (no API keys) granted `Cognitive Services OpenAI User` on the
+shared AI Services account.
+
+**Why this scenario exists:** It exercises AgentOps' `http-json`
+invocation path — POSTing a JSON body, parsing a JSON response with a
+configurable dot-path, and measuring round-trip latency — against a
+freshly-deployed Azure resource the workflow itself owns end to end
+(image built server-side via `az acr build`, deployed via Bicep, pulled
+with managed identity, torn down by the teardown job).
+
+**Dataset:** `{rel_basic}` (3 short factual rows: arithmetic, capital
+city, sky color).
+
+**Evaluators:** `similarity`, `coherence`, `fluency`, `f1_score`,
+`avg_latency_seconds`. Thresholds are intentionally permissive (`>=0`)
+because the goal is to validate connectivity and the eval pipeline, not
+to gate on `gpt-4o-mini` quality.
 """,
         )
         written.append("http-aca")

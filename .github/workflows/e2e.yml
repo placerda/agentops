@@ -33,7 +33,8 @@ permissions:
   contents: read
 
 jobs:
-  demo:
+  offline-smoke:
+    name: Offline CLI smoke (no Azure)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -54,7 +55,7 @@ jobs:
       - name: Install runtime evaluator dependencies
         run: uv pip install azure-ai-evaluation pandas
 
-      - name: Run E2E demo
+      - name: Run offline CLI smoke test
         run: uv run python scripts/e2e_demo.py
 
       - name: Render summary on run page
@@ -131,6 +132,7 @@ jobs:
     outputs:
       aca_url: ${{ steps.deploy_perrun.outputs.aca_url }}
       aca_app_name: ${{ steps.deploy_perrun.outputs.aca_app_name }}
+      uami_name: ${{ steps.deploy_perrun.outputs.uami_name }}
       hosted_agent_id: ${{ steps.create_hosted_agent.outputs.agent_id }}
       hosted_agent_name: ${{ steps.create_hosted_agent.outputs.agent_name }}
       suffix: ${{ steps.suffix.outputs.value }}
@@ -148,12 +150,43 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - id: discover
+        name: Discover ACR + AI Services names
+        if: ${{ github.event.inputs.scenarios == 'all' || github.event.inputs.scenarios == 'http-aca' }}
+        run: |
+          set -euo pipefail
+          rg="${{ vars.AZURE_E2E_RESOURCE_GROUP }}"
+          acr_name=$(az acr list -g "$rg" --query "[0].name" -o tsv)
+          acr_login=$(az acr show -n "$acr_name" --query loginServer -o tsv)
+          ai_name=$(az cognitiveservices account list -g "$rg" \
+            --query "[?kind=='AIServices'] | [0].name" -o tsv)
+          if [ -z "$acr_name" ] || [ -z "$ai_name" ]; then
+            echo "Could not discover ACR or AI Services in $rg" >&2
+            exit 1
+          fi
+          echo "acr_name=$acr_name" >> "$GITHUB_OUTPUT"
+          echo "acr_login=$acr_login" >> "$GITHUB_OUTPUT"
+          echo "ai_name=$ai_name" >> "$GITHUB_OUTPUT"
+          echo "Discovered ACR=$acr_login, AI Services=$ai_name"
+
+      - name: Build & push hello-agent image (server-side ACR build)
+        if: ${{ github.event.inputs.scenarios == 'all' || github.event.inputs.scenarios == 'http-aca' }}
+        run: |
+          set -euo pipefail
+          tag="run${{ github.run_id }}"
+          az acr build \
+            --registry "${{ steps.discover.outputs.acr_name }}" \
+            --image "agentops-e2e/hello-agent:$tag" \
+            infra/e2e/agent-app
+          echo "Image: ${{ steps.discover.outputs.acr_login }}/agentops-e2e/hello-agent:$tag"
+
       - id: deploy_perrun
-        name: Deploy per-run ACA echo app
+        name: Deploy per-run ACA hello-agent app
         if: ${{ github.event.inputs.scenarios == 'all' || github.event.inputs.scenarios == 'http-aca' }}
         run: |
           set -euo pipefail
           deployment_name="agentops-e2e-perrun-${{ github.run_id }}"
+          image="${{ steps.discover.outputs.acr_login }}/agentops-e2e/hello-agent:run${{ github.run_id }}"
           az deployment group create \
             --resource-group "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" \
             --name "$deployment_name" \
@@ -161,25 +194,38 @@ jobs:
             --parameters \
               acaEnvironmentId="${{ vars.AZURE_E2E_ACA_ENV_ID }}" \
               suffix="${{ steps.suffix.outputs.value }}" \
+              image="$image" \
+              acrName="${{ steps.discover.outputs.acr_name }}" \
+              acrLoginServer="${{ steps.discover.outputs.acr_login }}" \
+              aiServicesName="${{ steps.discover.outputs.ai_name }}" \
+              azureOpenAiEndpoint="${{ vars.AZURE_E2E_OPENAI_ENDPOINT }}" \
+              azureOpenAiDeployment="${{ vars.AZURE_E2E_MODEL_DEPLOYMENT }}" \
             --output json > deployment.json
-          aca_url=$(jq -r '.properties.outputs.echoUrl.value' deployment.json)
+          aca_url=$(jq -r '.properties.outputs.agentUrl.value' deployment.json)
           aca_app=$(jq -r '.properties.outputs.appName.value' deployment.json)
+          uami_name=$(jq -r '.properties.outputs.uamiName.value' deployment.json)
           echo "aca_url=$aca_url" >> "$GITHUB_OUTPUT"
           echo "aca_app_name=$aca_app" >> "$GITHUB_OUTPUT"
-          echo "Deployed ACA echo app: $aca_url"
+          echo "uami_name=$uami_name" >> "$GITHUB_OUTPUT"
+          echo "Deployed hello-agent ACA: $aca_url"
 
-      - name: Wait for ACA app to be reachable
+      - name: Wait for hello-agent to be ready
         if: steps.deploy_perrun.outputs.aca_url != ''
         run: |
           set -e
-          for i in $(seq 1 30); do
-            if curl -fsS -o /dev/null --max-time 5 "${{ steps.deploy_perrun.outputs.aca_url }}/"; then
-              echo "ACA reachable after ${i} attempts"
+          # Container needs a moment to pull the image, start uvicorn, and
+          # for DefaultAzureCredential to acquire its first token. The /
+          # health endpoint reports ``"ready": true`` once the agent is up.
+          for i in $(seq 1 60); do
+            body=$(curl -fsS --max-time 5 "${{ steps.deploy_perrun.outputs.aca_url }}/" || true)
+            if [ -n "$body" ] && echo "$body" | grep -q '"ready":true'; then
+              echo "hello-agent ready after ${i} attempts: $body"
               exit 0
             fi
             sleep 5
           done
-          echo "ACA app did not become reachable" >&2
+          echo "hello-agent did not become ready" >&2
+          curl -sS --max-time 5 "${{ steps.deploy_perrun.outputs.aca_url }}/" || true
           exit 1
 
       - name: Set up Python (for hosted agent provisioning)
@@ -431,6 +477,13 @@ jobs:
             --resource-group "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" \
             --name "${{ needs.bootstrap-live.outputs.aca_app_name }}" \
             --yes || true
+      - name: Delete per-run UAMI
+        if: needs.bootstrap-live.outputs.uami_name != ''
+        run: |
+          set -e
+          az identity delete \
+            --resource-group "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" \
+            --name "${{ needs.bootstrap-live.outputs.uami_name }}" || true
       - name: Set up Python (for hosted agent teardown)
         if: needs.bootstrap-live.outputs.hosted_agent_name != ''
         uses: actions/setup-python@v6
@@ -446,17 +499,28 @@ jobs:
         run: |
           python scripts/e2e_hosted_agent.py delete \
             --name "${{ needs.bootstrap-live.outputs.hosted_agent_name }}" || true
-      - name: Sweep stale e2e ACA apps (>1d old)
+      - name: Sweep stale e2e ACA apps + UAMIs (>1d old)
         run: |
           set -e
           cutoff=$(date -u -d '1 day ago' +%FT%TZ)
+          # Sweep stale per-run ACA apps (both legacy 'aca-echo-' and new 'aca-agent-' names).
           mapfile -t apps < <(az containerapp list \
             --resource-group "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" \
-            --query "[?starts_with(name,'aca-echo-run') && properties.latestRevisionFqdn!=null].{name:name,created:systemData.createdAt}" \
+            --query "[?(starts_with(name,'aca-echo-run') || starts_with(name,'aca-agent-run')) && properties.latestRevisionFqdn!=null].{name:name,created:systemData.createdAt}" \
             -o json | jq -r --arg cutoff "$cutoff" '.[] | select(.created < $cutoff) | .name')
           for app in "${apps[@]}"; do
             [ -z "$app" ] && continue
             echo "Deleting stale app: $app"
             az containerapp delete -g "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" -n "$app" --yes || true
+          done
+          # Sweep stale per-run UAMIs.
+          mapfile -t uamis < <(az identity list \
+            --resource-group "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" \
+            --query "[?starts_with(name,'uami-run')].{name:name,created:systemData.createdAt}" \
+            -o json | jq -r --arg cutoff "$cutoff" '.[] | select(.created < $cutoff) | .name')
+          for uami in "${uamis[@]}"; do
+            [ -z "$uami" ] && continue
+            echo "Deleting stale UAMI: $uami"
+            az identity delete -g "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" -n "$uami" || true
           done
 
