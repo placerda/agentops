@@ -34,7 +34,6 @@ permissions:
 
 jobs:
   offline-smoke:
-    name: Offline CLI smoke (no Azure)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -132,7 +131,6 @@ jobs:
     outputs:
       aca_url: ${{ steps.deploy_perrun.outputs.aca_url }}
       aca_app_name: ${{ steps.deploy_perrun.outputs.aca_app_name }}
-      uami_name: ${{ steps.deploy_perrun.outputs.uami_name }}
       hosted_agent_id: ${{ steps.create_hosted_agent.outputs.agent_id }}
       hosted_agent_name: ${{ steps.create_hosted_agent.outputs.agent_name }}
       suffix: ${{ steps.suffix.outputs.value }}
@@ -151,7 +149,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - id: discover
-        name: Discover ACR + AI Services names
+        name: Discover ACR + AI Services + UAMI
         if: ${{ github.event.inputs.scenarios == 'all' || github.event.inputs.scenarios == 'http-aca' }}
         run: |
           set -euo pipefail
@@ -160,14 +158,25 @@ jobs:
           acr_login=$(az acr show -n "$acr_name" --query loginServer -o tsv)
           ai_name=$(az cognitiveservices account list -g "$rg" \
             --query "[?kind=='AIServices'] | [0].name" -o tsv)
-          if [ -z "$acr_name" ] || [ -z "$ai_name" ]; then
-            echo "Could not discover ACR or AI Services in $rg" >&2
+          uami_name=$(az identity list -g "$rg" \
+            --query "[?ends_with(name,'-aca-uami-${{ vars.AZURE_E2E_SUFFIX }}')] | [0].name" -o tsv)
+          if [ -z "$uami_name" ]; then
+            # Fallback: any *-aca-uami-* in the RG (bootstrap creates exactly one)
+            uami_name=$(az identity list -g "$rg" \
+              --query "[?contains(name,'-aca-uami-')] | [0].name" -o tsv)
+          fi
+          if [ -z "$acr_name" ] || [ -z "$ai_name" ] || [ -z "$uami_name" ]; then
+            echo "Could not discover ACR / AI Services / aca-uami in $rg" >&2
             exit 1
           fi
+          uami_id=$(az identity show -g "$rg" -n "$uami_name" --query id -o tsv)
+          uami_client_id=$(az identity show -g "$rg" -n "$uami_name" --query clientId -o tsv)
           echo "acr_name=$acr_name" >> "$GITHUB_OUTPUT"
           echo "acr_login=$acr_login" >> "$GITHUB_OUTPUT"
           echo "ai_name=$ai_name" >> "$GITHUB_OUTPUT"
-          echo "Discovered ACR=$acr_login, AI Services=$ai_name"
+          echo "uami_id=$uami_id" >> "$GITHUB_OUTPUT"
+          echo "uami_client_id=$uami_client_id" >> "$GITHUB_OUTPUT"
+          echo "Discovered ACR=$acr_login, AI Services=$ai_name, UAMI=$uami_name"
 
       - name: Build & push hello-agent image (server-side ACR build)
         if: ${{ github.event.inputs.scenarios == 'all' || github.event.inputs.scenarios == 'http-aca' }}
@@ -195,18 +204,16 @@ jobs:
               acaEnvironmentId="${{ vars.AZURE_E2E_ACA_ENV_ID }}" \
               suffix="${{ steps.suffix.outputs.value }}" \
               image="$image" \
-              acrName="${{ steps.discover.outputs.acr_name }}" \
               acrLoginServer="${{ steps.discover.outputs.acr_login }}" \
-              aiServicesName="${{ steps.discover.outputs.ai_name }}" \
+              uamiResourceId="${{ steps.discover.outputs.uami_id }}" \
+              uamiClientId="${{ steps.discover.outputs.uami_client_id }}" \
               azureOpenAiEndpoint="${{ vars.AZURE_E2E_OPENAI_ENDPOINT }}" \
               azureOpenAiDeployment="${{ vars.AZURE_E2E_MODEL_DEPLOYMENT }}" \
             --output json > deployment.json
           aca_url=$(jq -r '.properties.outputs.agentUrl.value' deployment.json)
           aca_app=$(jq -r '.properties.outputs.appName.value' deployment.json)
-          uami_name=$(jq -r '.properties.outputs.uamiName.value' deployment.json)
           echo "aca_url=$aca_url" >> "$GITHUB_OUTPUT"
           echo "aca_app_name=$aca_app" >> "$GITHUB_OUTPUT"
-          echo "uami_name=$uami_name" >> "$GITHUB_OUTPUT"
           echo "Deployed hello-agent ACA: $aca_url"
 
       - name: Wait for hello-agent to be ready
@@ -477,13 +484,6 @@ jobs:
             --resource-group "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" \
             --name "${{ needs.bootstrap-live.outputs.aca_app_name }}" \
             --yes || true
-      - name: Delete per-run UAMI
-        if: needs.bootstrap-live.outputs.uami_name != ''
-        run: |
-          set -e
-          az identity delete \
-            --resource-group "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" \
-            --name "${{ needs.bootstrap-live.outputs.uami_name }}" || true
       - name: Set up Python (for hosted agent teardown)
         if: needs.bootstrap-live.outputs.hosted_agent_name != ''
         uses: actions/setup-python@v6
@@ -499,11 +499,15 @@ jobs:
         run: |
           python scripts/e2e_hosted_agent.py delete \
             --name "${{ needs.bootstrap-live.outputs.hosted_agent_name }}" || true
-      - name: Sweep stale e2e ACA apps + UAMIs (>1d old)
+      - name: Sweep stale e2e ACA apps (>1d old)
         run: |
           set -e
           cutoff=$(date -u -d '1 day ago' +%FT%TZ)
           # Sweep stale per-run ACA apps (both legacy 'aca-echo-' and new 'aca-agent-' names).
+          # NOTE: We deliberately do NOT sweep UAMIs here — the *-aca-uami-* identity is
+          # long-lived (created by bootstrap.bicep) and reused across runs to avoid the
+          # multi-minute Entra ID role-assignment propagation delay that would otherwise
+          # 401 every fresh per-run identity against Azure OpenAI.
           mapfile -t apps < <(az containerapp list \
             --resource-group "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" \
             --query "[?(starts_with(name,'aca-echo-run') || starts_with(name,'aca-agent-run')) && properties.latestRevisionFqdn!=null].{name:name,created:systemData.createdAt}" \
@@ -512,15 +516,5 @@ jobs:
             [ -z "$app" ] && continue
             echo "Deleting stale app: $app"
             az containerapp delete -g "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" -n "$app" --yes || true
-          done
-          # Sweep stale per-run UAMIs.
-          mapfile -t uamis < <(az identity list \
-            --resource-group "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" \
-            --query "[?starts_with(name,'uami-run')].{name:name,created:systemData.createdAt}" \
-            -o json | jq -r --arg cutoff "$cutoff" '.[] | select(.created < $cutoff) | .name')
-          for uami in "${uamis[@]}"; do
-            [ -z "$uami" ] && continue
-            echo "Deleting stale UAMI: $uami"
-            az identity delete -g "${{ vars.AZURE_E2E_RESOURCE_GROUP }}" -n "$uami" || true
           done
 

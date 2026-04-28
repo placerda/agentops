@@ -5,20 +5,17 @@
 // exercise AgentOps' http-json invocation path against a real LLM.
 //
 // Auth flow (no secrets):
-//   1. Create a User-Assigned Managed Identity (UAMI).
-//   2. Grant UAMI:
-//        - AcrPull on the long-lived ACR (so ACA can pull the image).
-//        - Cognitive Services OpenAI User on AI Services (so the agent can
-//          call Azure OpenAI via Entra ID, no API keys).
-//   3. Attach the UAMI to the ACA app and use it as the registry identity.
+//   The long-lived UAMI created by bootstrap.bicep already has AcrPull on
+//   the ACR and Cognitive Services OpenAI User on the AI Services account,
+//   so all this template does is attach that UAMI to the ACA app.
 //
-// All per-run resources are named with a unique suffix derived from
+// Per-run resources are named with a unique suffix derived from
 // github.run_id so multiple workflow runs do not collide and teardown is a
-// straight `az containerapp delete` + `az identity delete`.
+// straight `az containerapp delete`.
 
 targetScope = 'resourceGroup'
 
-@description('Azure region for the ACA app + UAMI.')
+@description('Azure region for the ACA app.')
 param location string = resourceGroup().location
 
 @description('Resource id of the long-lived Container Apps managed environment from bootstrap.bicep.')
@@ -30,14 +27,14 @@ param suffix string
 @description('Fully qualified container image (e.g. <acr>.azurecr.io/agentops-e2e/hello-agent:run123).')
 param image string
 
-@description('Name (not id) of the long-lived ACR created by bootstrap.bicep — used to scope AcrPull.')
-param acrName string
-
 @description('Login server of the long-lived ACR (e.g. <acr>.azurecr.io) — used by the registry config.')
 param acrLoginServer string
 
-@description('Name of the AI Services / Foundry account from bootstrap.bicep — scope for Cognitive Services OpenAI User.')
-param aiServicesName string
+@description('Resource id of the long-lived UAMI (created by bootstrap.bicep) that already has AcrPull + Cognitive Services OpenAI User. Reusing a long-lived UAMI avoids the multi-minute Entra ID propagation delay a fresh per-run UAMI would suffer.')
+param uamiResourceId string
+
+@description('Client id of the long-lived UAMI — set as AZURE_CLIENT_ID in the container so DefaultAzureCredential picks it.')
+param uamiClientId string
 
 @description('Azure OpenAI endpoint URL (https://<account>.cognitiveservices.azure.com/ or .openai.azure.com/).')
 param azureOpenAiEndpoint string
@@ -49,44 +46,6 @@ param azureOpenAiDeployment string
 param targetPort int = 8080
 
 var appName = 'aca-agent-${suffix}'
-var uamiName = 'uami-${suffix}'
-
-// Built-in role definition ids (subscription-scoped).
-var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-var openAiUserRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd' // Cognitive Services OpenAI User
-
-resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: uamiName
-  location: location
-}
-
-resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' existing = {
-  name: acrName
-}
-
-resource aiServices 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' existing = {
-  name: aiServicesName
-}
-
-resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, uami.id, 'AcrPull')
-  scope: acr
-  properties: {
-    principalId: uami.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
-  }
-}
-
-resource openAiUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(aiServices.id, uami.id, 'CognitiveServicesOpenAIUser')
-  scope: aiServices
-  properties: {
-    principalId: uami.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', openAiUserRoleId)
-  }
-}
 
 resource agentApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
@@ -94,13 +53,9 @@ resource agentApp 'Microsoft.App/containerApps@2024-03-01' = {
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
-      '${uami.id}': {}
+      '${uamiResourceId}': {}
     }
   }
-  dependsOn: [
-    acrPullAssignment
-    openAiUserAssignment
-  ]
   properties: {
     managedEnvironmentId: acaEnvironmentId
     configuration: {
@@ -120,7 +75,7 @@ resource agentApp 'Microsoft.App/containerApps@2024-03-01' = {
       registries: [
         {
           server: acrLoginServer
-          identity: uami.id
+          identity: uamiResourceId
         }
       ]
     }
@@ -143,10 +98,10 @@ resource agentApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: azureOpenAiDeployment
             }
             {
-              // DefaultAzureCredential needs the UAMI client id when more than
-              // one identity could be picked up.
+              // DefaultAzureCredential needs the UAMI client id to disambiguate
+              // when more than one identity could be picked up.
               name: 'AZURE_CLIENT_ID'
-              value: uami.properties.clientId
+              value: uamiClientId
             }
           ]
         }
@@ -164,6 +119,3 @@ output agentUrl string = 'https://${agentApp.properties.configuration.ingress.fq
 
 @description('App name (for teardown).')
 output appName string = appName
-
-@description('UAMI name (for teardown).')
-output uamiName string = uamiName
