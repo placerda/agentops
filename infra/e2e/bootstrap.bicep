@@ -10,7 +10,7 @@
 //
 // Usage:
 //   az deployment group create \
-//     -g rg-paulolacerda-0426261026 \
+//     -g <YOUR_RESOURCE_GROUP> \
 //     -f infra/e2e/bootstrap.bicep \
 //     -p prefix=agentops-e2e
 //

@@ -13,9 +13,9 @@ and pick which scenario(s) to execute against real Azure resources.
 ## Prerequisites
 
 - An Azure subscription you control (the test subscription is fine).
-- A pre-created resource group. The repository's default expectation is
-  `rg-paulolacerda-0426261026` in `eastus2`, but any RG works as long as
-  the corresponding `AZURE_E2E_RESOURCE_GROUP` Variable points at it.
+- A pre-created resource group in your subscription. Any RG works — the
+  workflow reads its name from the `AZURE_E2E_RESOURCE_GROUP` Variable.
+  Examples in this guide use `<YOUR_RESOURCE_GROUP>` as a placeholder.
 - Sufficient role on that RG to assign roles (Owner or `User Access
   Administrator`).
 - `az` CLI ≥ 2.60 and `bicep` ≥ 0.27 installed locally.
@@ -35,7 +35,7 @@ az login
 az account set --subscription <SUBSCRIPTION_ID>
 
 az deployment group create \
-  --resource-group rg-paulolacerda-0426261026 \
+  --resource-group <YOUR_RESOURCE_GROUP> \
   --name agentops-e2e-bootstrap \
   --template-file infra/e2e/bootstrap.bicep \
   --parameters @infra/e2e/bootstrap.parameters.example.json
@@ -45,7 +45,7 @@ Capture the outputs (printed at the end of the deployment):
 
 ```bash
 az deployment group show \
-  -g rg-paulolacerda-0426261026 \
+  -g <YOUR_RESOURCE_GROUP> \
   -n agentops-e2e-bootstrap \
   --query properties.outputs
 ```
@@ -81,7 +81,7 @@ relationship between the repo and an Entra app.
 ```bash
 APP_NAME=agentops-e2e
 SUBSCRIPTION_ID=<your-sub>
-RG=rg-paulolacerda-0426261026
+RG=<YOUR_RESOURCE_GROUP>
 
 # 1. Create the app registration (no client secret).
 APP_ID=$(az ad app create --display-name "$APP_NAME" --query appId -o tsv)
@@ -141,7 +141,7 @@ GitHub → **Settings → Secrets and variables → Actions → Variables**
 | `AZURE_CLIENT_ID` | App ID from Step 3 |
 | `AZURE_TENANT_ID` | Tenant ID from Step 3 |
 | `AZURE_SUBSCRIPTION_ID` | Subscription ID |
-| `AZURE_E2E_RESOURCE_GROUP` | `rg-paulolacerda-0426261026` |
+| `AZURE_E2E_RESOURCE_GROUP` | name of the RG you deployed `bootstrap.bicep` into |
 
 **Bootstrap outputs (Step 1):**
 
