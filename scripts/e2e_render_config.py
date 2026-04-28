@@ -219,16 +219,12 @@ dataset: ../../{rel_basic}
 protocol: http-json
 request_field: message
 response_field: text
-evaluators:
-  - name: similarity
-  - name: coherence
-  - name: fluency
-  - name: f1_score
-  - name: avg_latency_seconds
+# Permissive thresholds: e2e smoke test of the http-json invocation path
+# against a real LLM, not a quality gate for gpt-4o-mini.
 thresholds:
-  similarity: ">=0"
   coherence: ">=0"
   fluency: ">=0"
+  similarity: ">=0"
   f1_score: ">=0"
   avg_latency_seconds: "<=60"
 """,
@@ -261,10 +257,10 @@ with managed identity, torn down by the teardown job).
 **Dataset:** `{rel_basic}` (3 short factual rows: arithmetic, capital
 city, sky color).
 
-**Evaluators:** `similarity`, `coherence`, `fluency`, `f1_score`,
-`avg_latency_seconds`. Thresholds are intentionally permissive (`>=0`)
-because the goal is to validate connectivity and the eval pipeline, not
-to gate on `gpt-4o-mini` quality.
+**Evaluators (auto-inferred from dataset shape):** `coherence`, `fluency`,
+`similarity`, `f1_score`, plus `avg_latency_seconds`. Thresholds are
+intentionally permissive (`>=0`) because the goal is to validate
+connectivity and the eval pipeline, not to gate on `gpt-4o-mini` quality.
 """,
         )
         written.append("http-aca")
