@@ -153,6 +153,9 @@ thresholds:
   intent_resolution: ">=0"
   task_adherence: ">=0"
   f1_score: ">=0"
+  coherence: ">=0"
+  fluency: ">=0"
+  similarity: ">=0"
   avg_latency_seconds: "<=60"
 """,
             header=f"""# Scenario: foundry-hosted (agent with tools)
