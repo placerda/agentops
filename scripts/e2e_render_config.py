@@ -191,6 +191,15 @@ of fabricating an answer.
 `tool_call_accuracy`, `intent_resolution`, `task_adherence`, plus
 `f1_score` and `avg_latency_seconds`. Thresholds are very permissive —
 this is a pipeline smoke test, not a quality gate.
+
+> **Note on `intent_resolution` / `task_adherence` low scores:** these are
+> AI-judge evaluators that grade the *natural-language* portion of the
+> response. This eval is single-turn — the agent stops at the
+> `function_call` and we never execute the tool, so the model never gets
+> to produce a final natural-language answer. The judges therefore see
+> only the synthetic `[Called get_weather(...)]` summary and score it
+> low. `tool_call_accuracy` (which judges the structured tool call
+> itself) is the meaningful metric for this scenario.
 """,
         )
         written.append("foundry-hosted")

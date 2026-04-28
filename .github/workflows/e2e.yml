@@ -32,6 +32,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Silence "Node.js 20 actions are deprecated" warnings from azure/login@v2 etc.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   demo:
     runs-on: ubuntu-latest
@@ -246,7 +250,7 @@ jobs:
           name: e2e-foundry-prompt
           path: |
             e2e-runs/foundry-prompt/.agentops/results/
-            e2e-runs/foundry-prompt/transcript.txt
+            e2e-runs/foundry-prompt/transcript.md
             e2e-runs/foundry-prompt/HEADER.md
             e2e-runs/foundry-prompt/agentops.yaml
           if-no-files-found: warn
@@ -296,7 +300,7 @@ jobs:
           name: e2e-foundry-hosted
           path: |
             e2e-runs/foundry-hosted/.agentops/results/
-            e2e-runs/foundry-hosted/transcript.txt
+            e2e-runs/foundry-hosted/transcript.md
             e2e-runs/foundry-hosted/HEADER.md
             e2e-runs/foundry-hosted/agentops.yaml
             e2e-runs/foundry-hosted/agent-info.json
@@ -346,7 +350,7 @@ jobs:
           name: e2e-http-aca
           path: |
             e2e-runs/http-aca/.agentops/results/
-            e2e-runs/http-aca/transcript.txt
+            e2e-runs/http-aca/transcript.md
             e2e-runs/http-aca/HEADER.md
             e2e-runs/http-aca/agentops.yaml
           if-no-files-found: warn
@@ -396,7 +400,7 @@ jobs:
           name: e2e-model-direct
           path: |
             e2e-runs/model-direct/.agentops/results/
-            e2e-runs/model-direct/transcript.txt
+            e2e-runs/model-direct/transcript.md
             e2e-runs/model-direct/HEADER.md
             e2e-runs/model-direct/agentops.yaml
           if-no-files-found: warn
