@@ -18,7 +18,6 @@ class RowMetric(BaseModel):
     value: Optional[float] = None
     error: Optional[str] = None
     reason: Optional[str] = None
-    raw: Optional[Dict[str, Any]] = None
 
 
 class RowResult(BaseModel):

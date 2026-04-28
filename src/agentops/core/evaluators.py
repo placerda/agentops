@@ -205,7 +205,11 @@ _TOOL_USE_EVALUATORS: Tuple[EvaluatorPreset, ...] = (
             "response": "$prediction",
             "tool_definitions": "$tool_definitions",
         },
-        default_threshold=_t("task_adherence", ">=", 3.0),
+        # azure-ai-evaluation's TaskAdherenceEvaluator returns a binary
+        # 0/1 score (0 = flagged, 1 = adheres) — *not* a 1–5 Likert scale
+        # like IntentResolutionEvaluator. We default to >=0.5 so a score
+        # of 1.0 passes and 0.0 fails.
+        default_threshold=_t("task_adherence", ">=", 0.5),
         categories=frozenset({"agent"}),
         agent_only=True,
         needs_conversation=True,

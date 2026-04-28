@@ -332,10 +332,6 @@ def run_evaluator(
         result = runtime.callable(**kwargs)
         score = _extract_score(result, preset.score_key)
         reason = _extract_reason(result, preset.score_key)
-        raw = result if isinstance(result, dict) and preset.score_key in (
-            "task_adherence",
-            "intent_resolution",
-        ) else None
-        return RowMetric(name=preset.score_key, value=score, reason=reason, raw=raw)
+        return RowMetric(name=preset.score_key, value=score, reason=reason)
     except Exception as exc:  # noqa: BLE001
         return RowMetric(name=preset.score_key, error=str(exc))
