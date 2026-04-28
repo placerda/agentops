@@ -60,6 +60,13 @@ class EvaluatorPreset:
     categories: FrozenSet[str] = field(default_factory=frozenset)
     #: Set when this evaluator is not safe to run for raw model deployments.
     agent_only: bool = False
+    #: When True and the row carries ``tool_calls``, the runner upgrades the
+    #: ``query`` and ``response`` kwargs from plain strings to conversation
+    #: message lists that include the agent's tool_call + tool_result trace.
+    #: This is required for evaluators that judge agent reasoning (e.g.
+    #: TaskAdherence, IntentResolution) — without the trace they only see a
+    #: short final answer and consistently score it as 1/5.
+    needs_conversation: bool = False
 
 
 def _t(metric: str, criteria: str, value: float) -> Threshold:
@@ -187,6 +194,7 @@ _TOOL_USE_EVALUATORS: Tuple[EvaluatorPreset, ...] = (
         default_threshold=_t("intent_resolution", ">=", 3.0),
         categories=frozenset({"agent"}),
         agent_only=True,
+        needs_conversation=True,
     ),
     EvaluatorPreset(
         name="TaskAdherenceEvaluator",
@@ -199,6 +207,7 @@ _TOOL_USE_EVALUATORS: Tuple[EvaluatorPreset, ...] = (
         default_threshold=_t("task_adherence", ">=", 3.0),
         categories=frozenset({"agent"}),
         agent_only=True,
+        needs_conversation=True,
     ),
 )
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -155,6 +156,92 @@ _PLACEHOLDERS = {
 }
 
 
+def _build_conversation_messages(
+    *,
+    input_text: Optional[str],
+    response_text: str,
+    tool_calls: Any,
+) -> Optional[Dict[str, List[Dict[str, Any]]]]:
+    """Build conversation-style ``query`` and ``response`` for agent evaluators.
+
+    When the agent invoked tools, returning only the final answer text to
+    evaluators like ``IntentResolutionEvaluator`` and ``TaskAdherenceEvaluator``
+    leaves them blind to *how* the agent arrived at that answer. They then
+    consistently score it as 1/5 even when the agent did the right thing.
+
+    This helper returns a structured payload compatible with the
+    ``azure.ai.evaluation`` conversational schema:
+
+    * ``query`` -> a single user message with the original input text
+    * ``response`` -> a sequence of assistant tool_call messages, optional
+      tool result messages (when each captured call has a ``result``
+      string), and a final assistant text message with the natural-language
+      answer.
+
+    Returns ``None`` when there are no tool calls to include — callers
+    should fall back to plain string kwargs in that case.
+    """
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return None
+
+    query_messages: List[Dict[str, Any]] = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": input_text or ""}],
+        }
+    ]
+
+    response_messages: List[Dict[str, Any]] = []
+    for index, call in enumerate(tool_calls):
+        if not isinstance(call, dict):
+            continue
+        # Normalise across the OpenAI ``function_call`` shape and the
+        # nested ``function`` envelope produced by some Foundry payloads.
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = call.get("name") or function.get("name")
+        if not name:
+            continue
+        arguments = call.get("arguments")
+        if arguments is None:
+            arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                # leave as raw string — evaluators tolerate either form
+                pass
+        tool_call_id = call.get("tool_call_id") or call.get("id") or f"call_{index}"
+
+        response_messages.append({
+            "role": "assistant",
+            "content": [{
+                "type": "tool_call",
+                "tool_call_id": tool_call_id,
+                "name": name,
+                "arguments": arguments if arguments is not None else {},
+            }],
+        })
+
+        result = call.get("result")
+        if isinstance(result, str) and result:
+            response_messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": [{"type": "tool_result", "tool_result": result}],
+            })
+
+    if response_text:
+        response_messages.append({
+            "role": "assistant",
+            "content": [{"type": "text", "text": response_text}],
+        })
+
+    if not response_messages:
+        return None
+
+    return {"query": query_messages, "response": response_messages}
+
+
 def _resolve_kwargs(
     mapping: Dict[str, str],
     *,
@@ -212,6 +299,20 @@ def run_evaluator(
 
     try:
         kwargs = _resolve_kwargs(preset.input_mapping, row=row, response=response)
+        if preset.needs_conversation:
+            conversation = _build_conversation_messages(
+                input_text=row.get("input"),
+                response_text=response,
+                tool_calls=row.get("tool_calls"),
+            )
+            if conversation is not None:
+                # Upgrade query/response from plain strings to the
+                # conversational schema. Both kwargs are guaranteed to be
+                # in input_mapping for evaluators that opt into this.
+                if "query" in kwargs:
+                    kwargs["query"] = conversation["query"]
+                if "response" in kwargs:
+                    kwargs["response"] = conversation["response"]
         result = runtime.callable(**kwargs)
         score = _extract_score(result, preset.score_key)
         return RowMetric(name=preset.score_key, value=score)

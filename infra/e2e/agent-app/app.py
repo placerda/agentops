@@ -72,6 +72,9 @@ def _make_get_weather_tool():
     @tool(approval_mode="never_require")
     def get_weather(location: str, ctx: FunctionInvocationContext) -> str:
         """Get the current weather for a given location."""
+        result_text = (
+            f"It's 72°F (22°C) and partly cloudy in {location}, with light winds."
+        )
         # Per-request list passed via function_invocation_kwargs so each
         # POST captures only its own tool calls (no global state).
         captured = ctx.kwargs.get("captured_calls")
@@ -80,8 +83,9 @@ def _make_get_weather_tool():
                 "type": "function_call",
                 "name": "get_weather",
                 "arguments": {"location": location},
+                "result": result_text,
             })
-        return f"It's 72°F (22°C) and partly cloudy in {location}, with light winds."
+        return result_text
 
     return get_weather
 
