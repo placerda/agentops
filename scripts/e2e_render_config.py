@@ -232,8 +232,11 @@ tool_calls_field: tool_calls
 # invocation path against a real LLM, not a quality gate for the model.
 thresholds:
   tool_call_accuracy: ">=0"
+  intent_resolution: ">=0"
+  task_adherence: ">=0"
   coherence: ">=0"
   fluency: ">=0"
+  similarity: ">=0"
   f1_score: ">=0"
   avg_latency_seconds: "<=60"
 """,
