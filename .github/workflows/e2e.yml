@@ -32,10 +32,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # Silence "Node.js 20 actions are deprecated" warnings from azure/login@v2 etc.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   demo:
     runs-on: ubuntu-latest
@@ -146,7 +142,7 @@ jobs:
         run: echo "value=run${{ github.run_id }}" >> "$GITHUB_OUTPUT"
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: ./.github/actions/azure-oidc-login
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -223,7 +219,7 @@ jobs:
         with:
           version: ">=0.9.0"
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: ./.github/actions/azure-oidc-login
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -273,7 +269,7 @@ jobs:
         with:
           version: ">=0.9.0"
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: ./.github/actions/azure-oidc-login
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -324,7 +320,7 @@ jobs:
         with:
           version: ">=0.9.0"
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: ./.github/actions/azure-oidc-login
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -373,7 +369,7 @@ jobs:
         with:
           version: ">=0.9.0"
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: ./.github/actions/azure-oidc-login
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -421,7 +417,7 @@ jobs:
       contents: read
     steps:
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: ./.github/actions/azure-oidc-login
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
