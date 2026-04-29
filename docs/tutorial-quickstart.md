@@ -3,7 +3,8 @@
 This tutorial covers the simplest end-to-end AgentOps flow: bootstrap a workspace, point it at any agent, and run an evaluation.
 
 > Looking for the long-form, do-it-yourself tour that also covers
-> baseline comparison, GitFlow CI/CD, and the watchdog agent? See
+> a real tool-calling support agent, baseline comparison, GitFlow
+> CI/CD, and the watchdog agent? See
 > [tutorial-end-to-end.md](tutorial-end-to-end.md).
 
 ## What you will build

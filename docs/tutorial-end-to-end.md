@@ -1,22 +1,37 @@
 # Tutorial — End-to-end with AgentOps
 
 This is the long-form, do-it-yourself tour of AgentOps. By the end you
-will have a real Foundry hosted agent under evaluation, a baseline
-comparison run, four GitFlow CI/CD workflows running on GitHub, and a
-watchdog report summarizing your run history.
+will have a real Foundry hosted agent with **three function tools**
+under evaluation, a baseline-vs-degraded comparison that demonstrates
+tool-call regression detection, four GitFlow CI/CD workflows wired to
+your own GitHub repo, and a watchdog report summarising your run
+history.
 
 It takes around 60–90 minutes the first time. Every step is concrete:
-you copy a command, you see an artifact, you keep moving.
+you copy a command, you see an artefact, you keep moving.
+
+> **Why a tool-calling agent?** Production agents fail in interesting
+> ways: they pick the wrong tool, fabricate arguments, or skip tool
+> use entirely and answer from memory. AgentOps grades all of those
+> behaviours — `tool_call_accuracy`, `intent_resolution`,
+> `task_adherence` — alongside text quality. A trivia chatbot would
+> only exercise the latter; this tutorial uses an agent where tool
+> behaviour is the point.
 
 ## What you will build
 
-- A Foundry hosted agent created from the portal.
-- A flat `agentops.yaml` pointing at that agent.
-- A 5-row evaluation dataset.
-- Two evaluation runs (a baseline and a "after a tweak" run) compared
-  side-by-side.
-- Four GitFlow workflows (`pr`, `dev`, `qa`, `prod`) wired to your own
-  GitHub repository, gated on threshold pass/fail.
+- A Foundry hosted **support agent** with three function tools:
+  `lookup_order`, `refund_order`, `escalate_to_human`.
+- A flat `agentops.yaml` pointing at that agent with thresholds on
+  both text-quality and tool-call metrics.
+- A 5-row evaluation dataset of realistic support tickets, each
+  carrying `tool_definitions` and the expected `tool_calls`.
+- Two evaluation runs (a tool-using **v1** baseline and a degraded
+  **v2** that answers from memory) compared side-by-side. The
+  baseline-vs-degraded delta shows tool-call accuracy collapse —
+  exactly the kind of regression CI is meant to catch.
+- Four GitFlow workflows (`pr`, `dev`, `qa`, `prod`) wired to your
+  own GitHub repository, gated on threshold pass/fail.
 - A watchdog report combining your run history with optional
   Application Insights telemetry.
 
@@ -26,6 +41,8 @@ you copy a command, you see an artifact, you keep moving.
 - Azure CLI (`az --version`) and `az login` working.
 - An Azure AI Foundry project (`AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`).
 - A model deployment in that project (`gpt-4o-mini` is enough).
+- The **Azure AI User** RBAC role on the Foundry account
+  (data-plane access required to create agents and call them).
 - A GitHub account and the `gh` CLI (or use the web UI for pushes).
 - An existing or new GitHub repo — empty is fine; we will populate it.
 
@@ -44,25 +61,50 @@ python -m venv .venv
 source .venv/bin/activate    # Windows: .venv\Scripts\Activate.ps1
 python -m pip install -U pip
 python -m pip install agentops-toolkit
+python -m pip install azure-ai-projects azure-identity   # used by the helper script
 agentops --version
 ```
 
-## 2. Create a Foundry hosted agent
+## 2. Create the Foundry hosted support agent
 
-In the [Azure AI Foundry portal](https://ai.azure.com):
+The tutorial uses **three function tools** that a real support agent
+would expose:
 
-1. Open your project, then **Build → Agents → New agent**.
-2. Name it `support-bot` (or any name).
-3. Pick the model deployment from the prerequisites.
-4. Paste a small system prompt:
+| Tool | Purpose | Required arguments |
+|---|---|---|
+| `lookup_order` | Look up an order's status. | `order_id` |
+| `refund_order` | Refund an order. | `order_id`, `reason` |
+| `escalate_to_human` | Hand the conversation to a human agent. | `category` |
 
-   > *You are a concise factual assistant. Answer in one or two
-   > sentences. If you don't know, say so.*
+Registering three tools through the portal is fiddly, so this
+repository ships a small helper script,
+[`scripts/create_support_agent.py`](../scripts/create_support_agent.py),
+that does it in one command. Save the file locally (it has no
+AgentOps dependency — only `azure-ai-projects` and `azure-identity`)
+and run:
 
-5. Save. The portal shows the agent name and a version number, e.g.
-   `support-bot:1`.
-6. Copy that `name:version` string — you will paste it into
-   `agentops.yaml` next.
+```bash
+python scripts/create_support_agent.py create --name support-bot
+# stdout: support-bot:1
+```
+
+The first line of stdout is the `name:version` identifier you paste
+into `agentops.yaml` next. The script:
+
+- Creates a hosted prompt agent named `support-bot`.
+- Registers the three function tools above with strict JSON Schema
+  parameters.
+- Pins the system prompt to require tool use whenever the user asks
+  about an order, a refund, or talking to a human.
+- Prints `support-bot:<version>` on stdout and a friendly summary on
+  stderr.
+
+> **Prefer the portal?** Open
+> [Azure AI Foundry](https://ai.azure.com) → your project → **Build →
+> Agents → New agent**, register the three function tools manually
+> (the script's source is the canonical schema), paste the system
+> prompt from `INSTRUCTIONS_GOOD` in the script, save, and copy the
+> resulting `name:version` string.
 
 ## 3. Initialize the workspace
 
@@ -87,45 +129,76 @@ You get:
     └── agentops-*/SKILL.md
 ```
 
-Open `.agentops/agentops.yaml` and set the target to your hosted
+Open `.agentops/agentops.yaml` and configure it for the support
 agent:
 
 ```yaml
 version: 1
 agent: "support-bot:1"
 
-dataset: ./data/smoke.jsonl
+dataset: ./data/tickets.jsonl
 
 thresholds:
+  # Tool-calling metrics (auto-inferred from tool_definitions /
+  # tool_calls in the dataset).
+  tool_call_accuracy: ">=0.8"
+  intent_resolution: ">=4"
+  task_adherence: ">=0.8"
+  # Text quality metrics.
   coherence: ">=3"
   fluency: ">=3"
   similarity: ">=3"
+  # Latency budget.
   avg_latency_seconds: "<=10"
 ```
 
-The `agent: "name:version"` shape is recognized as a **Foundry hosted
+The `agent: "name:version"` shape is recognised as a **Foundry hosted
 agent**. AgentOps invokes it through the Foundry project endpoint
 using your `az login` credentials.
 
-## 4. Author a tiny dataset
+## 4. Author the support-ticket dataset
 
-Replace `.agentops/data/smoke.jsonl` with five real questions:
+Replace `.agentops/data/smoke.jsonl` with a new
+`.agentops/data/tickets.jsonl` carrying five realistic support
+tickets. Each row includes:
+
+- `input` — the customer message,
+- `expected` — the expected outcome in plain prose,
+- `tool_definitions` — every tool the agent has access to,
+- `tool_calls` — the tool the agent **should** call (or an empty
+  list when the right behaviour is to answer with no tool).
+
+The variety of intents — order lookup, refund, escalation, an
+ambiguous query that should resolve to a lookup, and a casual
+greeting that should *not* trigger any tool — is what gives the
+evaluators something interesting to grade.
 
 ```jsonl
-{"input": "What is the capital of France?", "expected": "Paris."}
-{"input": "Who wrote 'Pride and Prejudice'?", "expected": "Jane Austen."}
-{"input": "What is the boiling point of water at sea level in Celsius?", "expected": "100 degrees Celsius."}
-{"input": "Name the largest planet in the solar system.", "expected": "Jupiter."}
-{"input": "What does HTTP stand for?", "expected": "HyperText Transfer Protocol."}
+{"input": "Where is my order ORD-12345?", "expected": "Calls lookup_order with order_id='ORD-12345'.", "tool_definitions": [{"type": "function", "name": "lookup_order", "description": "Look up an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]}}, {"type": "function", "name": "refund_order", "description": "Refund an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["order_id", "reason"]}}, {"type": "function", "name": "escalate_to_human", "description": "Hand the conversation to a human.", "parameters": {"type": "object", "properties": {"category": {"type": "string"}}, "required": ["category"]}}], "tool_calls": [{"type": "tool_call", "tool_call_id": "c1", "name": "lookup_order", "arguments": {"order_id": "ORD-12345"}}]}
+{"input": "I want a refund for ORD-77821, it arrived broken.", "expected": "Calls refund_order with order_id='ORD-77821' and reason mentioning broken.", "tool_definitions": [{"type": "function", "name": "lookup_order", "description": "Look up an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]}}, {"type": "function", "name": "refund_order", "description": "Refund an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["order_id", "reason"]}}, {"type": "function", "name": "escalate_to_human", "description": "Hand the conversation to a human.", "parameters": {"type": "object", "properties": {"category": {"type": "string"}}, "required": ["category"]}}], "tool_calls": [{"type": "tool_call", "tool_call_id": "c2", "name": "refund_order", "arguments": {"order_id": "ORD-77821", "reason": "arrived broken"}}]}
+{"input": "Please connect me to a human about my refund — this has dragged on too long.", "expected": "Calls escalate_to_human with category='refund'.", "tool_definitions": [{"type": "function", "name": "lookup_order", "description": "Look up an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]}}, {"type": "function", "name": "refund_order", "description": "Refund an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["order_id", "reason"]}}, {"type": "function", "name": "escalate_to_human", "description": "Hand the conversation to a human.", "parameters": {"type": "object", "properties": {"category": {"type": "string"}}, "required": ["category"]}}], "tool_calls": [{"type": "tool_call", "tool_call_id": "c3", "name": "escalate_to_human", "arguments": {"category": "refund"}}]}
+{"input": "Did ORD-99001 ship yet?", "expected": "Calls lookup_order with order_id='ORD-99001'.", "tool_definitions": [{"type": "function", "name": "lookup_order", "description": "Look up an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]}}, {"type": "function", "name": "refund_order", "description": "Refund an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["order_id", "reason"]}}, {"type": "function", "name": "escalate_to_human", "description": "Hand the conversation to a human.", "parameters": {"type": "object", "properties": {"category": {"type": "string"}}, "required": ["category"]}}], "tool_calls": [{"type": "tool_call", "tool_call_id": "c4", "name": "lookup_order", "arguments": {"order_id": "ORD-99001"}}]}
+{"input": "Hi there!", "expected": "Replies with a brief greeting and does NOT call any tool.", "tool_definitions": [{"type": "function", "name": "lookup_order", "description": "Look up an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]}}, {"type": "function", "name": "refund_order", "description": "Refund an order.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["order_id", "reason"]}}, {"type": "function", "name": "escalate_to_human", "description": "Hand the conversation to a human.", "parameters": {"type": "object", "properties": {"category": {"type": "string"}}, "required": ["category"]}}], "tool_calls": []}
 ```
 
-The dataset row shape decides which evaluators run. With `input` and
-`expected` you get Coherence, Fluency, Similarity, F1Score, and
-`avg_latency_seconds`. Add a `context` field to unlock RAG evaluators;
-add `tool_calls` to unlock agent-workflow evaluators. See
-[`tutorial-rag.md`](tutorial-rag.md) and
-[`tutorial-agent-workflow.md`](tutorial-agent-workflow.md) for those
-shapes.
+> **Why each row repeats the full `tool_definitions`?** Each dataset
+> row is evaluated independently and the evaluators that check tool
+> selection / argument accuracy need the **complete** tool catalogue
+> per row. Repetition is the cost of row-level isolation; in real
+> projects a small Python script can stamp the same definitions into
+> every row at dataset-build time.
+
+The presence of `tool_definitions` and `tool_calls` is what auto-
+selects the tool-calling evaluators on top of the standard text-
+quality stack. When AgentOps loads the dataset it picks:
+
+| Evaluator | What it grades |
+|---|---|
+| `ToolCallAccuracyEvaluator` | Did the agent emit the expected tool calls (name + arguments)? |
+| `IntentResolutionEvaluator` | Did the agent resolve the user's intent? |
+| `TaskAdherenceEvaluator` | Did the agent stick to the system prompt's tool-use rules? |
+| `CoherenceEvaluator` / `FluencyEvaluator` / `SimilarityEvaluator` / `F1ScoreEvaluator` | Standard text quality. |
+| `avg_latency_seconds` | End-to-end latency budget. |
 
 ## 5. Run your first evaluation
 
@@ -136,7 +209,8 @@ agentops eval run
 The CLI:
 
 1. Resolves the target from `agentops.yaml`.
-2. Calls the Foundry hosted agent once per row.
+2. Calls the Foundry hosted agent once per row, capturing both the
+   final text response and the structured tool calls.
 3. Runs evaluators using `AZURE_OPENAI_DEPLOYMENT`.
 4. Writes a timestamped run under `.agentops/results/<id>/` and
    updates `.agentops/results/latest/`.
@@ -150,41 +224,72 @@ cat .agentops/results/latest/report.md
 The report has four sections you will revisit often:
 
 - **Verdict** — one line: pass or fail.
-- **Per-row transcript** — input, expected, agent response, metrics.
+- **Per-row transcript** — input, expected, agent response, the
+  `tool_calls` the agent emitted, and every metric. The greeting
+  row's transcript shows an empty `tool_calls` block — useful when
+  debugging false-positive tool calls.
 - **Aggregate metrics** — averages across rows.
-- **Thresholds** — every rule from `agentops.yaml` with measured value.
+- **Thresholds** — every rule from `agentops.yaml` with measured
+  value. With v1 you should see all the tool-calling thresholds in
+  the green.
 
 The exit code is `0` (all thresholds passed) or `2` (one or more
 failed). `1` means a runtime error.
 
-## 6. Compare against a baseline
+## 6. Compare against a degraded baseline
 
-Snapshot the run id you just produced:
+This is where the tutorial earns its keep. Snapshot the run id you
+just produced and tell `agentops eval run` to use it as a baseline:
 
 ```bash
 ls -1 .agentops/results
-# 2026-04-28T15-30-12Z
-export BASELINE=.agentops/results/2026-04-28T15-30-12Z/results.json
+# 2026-04-29T15-30-12Z   latest
+export BASELINE=.agentops/results/2026-04-29T15-30-12Z/results.json
 ```
 
-Now go back to the portal and tweak the system prompt — for example,
-make it tell jokes instead of being concise. Save a new agent version
-(e.g. `support-bot:2`) and update `agentops.yaml`:
+Now create a **degraded** version of the agent — same model, same
+tools, but a friendly chatbot prompt that drops the tool-use rule:
+
+```bash
+python scripts/create_support_agent.py create \
+  --name support-bot \
+  --variant v2-degraded
+# stdout: support-bot:2
+```
+
+Update `agentops.yaml`:
 
 ```yaml
 agent: "support-bot:2"
 ```
 
-Re-run with the previous run as a baseline:
+Re-run with the v1 result as the baseline:
 
 ```bash
 agentops eval run --baseline "$BASELINE"
 ```
 
 The new `report.md` adds a **Comparison vs Baseline** section with
-per-metric deltas. Watch `similarity` drop — the joke-telling agent
-no longer matches the factual `expected` answers. This is the
-regression-detection loop you will wire into CI next.
+per-metric deltas. With the degraded prompt you should see something
+like:
+
+| Metric | Baseline (v1) | Current (v2) | Delta |
+|---|---|---|---|
+| `tool_call_accuracy` | 0.95 | 0.05 | ▼ −0.90 |
+| `intent_resolution` | 4.6 | 2.1 | ▼ −2.5 |
+| `task_adherence` | 1.0 | 0.0 | ▼ −1.0 |
+| `coherence` | 4.4 | 4.5 | ≈ |
+| `fluency` | 4.7 | 4.7 | ≈ |
+| `similarity` | 3.6 | 3.4 | ≈ |
+
+Text quality barely moves — the degraded agent is still articulate
+and on-topic — but tool-calling collapses, the verdict flips to fail,
+and the run exits `2`. **This is the regression-detection loop you
+will wire into CI next.**
+
+> Realistic numbers will jitter a bit run-to-run because the
+> evaluators themselves are model-graded. The shape of the delta
+> (tool metrics down, text metrics flat) is what matters.
 
 ## 7. Generate the GitFlow workflows
 
@@ -248,15 +353,16 @@ repo:<owner>/<repo>:environment:<env-name>
 Add one for `environment:dev`, one for `environment:qa`, one for
 `environment:prod`, and one for `pull_request` (used by
 `agentops-pr.yml`). Grant the app's managed identity at least
-`Cognitive Services OpenAI User` on the AOAI resource and the Foundry
-project's data plane reader role.
+`Cognitive Services OpenAI User` on the AOAI resource and the
+**Azure AI User** role on the Foundry project (data-plane reads
+plus the `agents/*` action surface).
 
 ### Open a PR
 
 ```bash
 git checkout -b feature/tweak-prompt
-# make any small change, e.g. edit smoke.jsonl
-git commit -am "test: refine smoke dataset"
+# make any small change, e.g. edit tickets.jsonl
+git commit -am "test: refine ticket dataset"
 git push -u origin feature/tweak-prompt
 gh pr create --base develop --fill
 ```
@@ -264,8 +370,8 @@ gh pr create --base develop --fill
 The `agentops-pr.yml` workflow runs. When it finishes you will see:
 
 - A green or red check on the PR.
-- A bot comment with the verdict, threshold table, and a link to the
-  full `report.md` artifact.
+- A bot comment with the verdict, threshold table (including the
+  tool-call metrics), and a link to the full `report.md` artifact.
 
 Merge the PR. `agentops-deploy-dev.yml` triggers, runs an eval against
 the dev environment, and deploys if it passes.
@@ -308,7 +414,8 @@ sources:
 ```
 
 Re-run `agentops agent analyze`. The findings table now mixes signals
-from your eval history with live telemetry from the deployed agent.
+from your eval history (including the v1 → v2 tool-call regression)
+with live telemetry from the deployed agent.
 
 > **Optional — WAF-AI security audit.** The watchdog can also run a
 > read-only audit of your Foundry resource group against the
@@ -324,15 +431,28 @@ For deeper integration (Copilot Chat extension, ACA deploy), see
 
 [waf-ai]: https://learn.microsoft.com/azure/well-architected/ai/security
 
-## 10. Where to go next
+## 10. Clean up
 
-You now have the full AgentOps loop running end-to-end. From here:
+The two agent versions live in your Foundry project until you delete
+them. The helper script handles cleanup:
+
+```bash
+python scripts/create_support_agent.py delete --name support-bot
+```
+
+This removes every version (idempotent — ignores 404s).
+
+## 11. Where to go next
+
+You now have the full AgentOps loop running end-to-end with a real
+tool-calling agent. From here:
 
 - **Per-scenario tutorials** — adapt the dataset shape to your own
   agent:
   - [`tutorial-rag.md`](tutorial-rag.md) — retrieval-augmented agents.
   - [`tutorial-agent-workflow.md`](tutorial-agent-workflow.md) —
-    tool-calling agents.
+    focused tool-calling reference (single-tool variants, HTTP-hosted
+    agents, dataset shape details).
   - [`tutorial-conversational-agent.md`](tutorial-conversational-agent.md)
     — multi-turn assistants.
   - [`tutorial-http-agent.md`](tutorial-http-agent.md) — agents
