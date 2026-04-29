@@ -384,6 +384,113 @@ Refer to the [Azure Monitor OTLP documentation](https://learn.microsoft.com/azur
 
 ---
 
+## Querying Traces in Azure Monitor (KQL)
+
+Once eval traces land in Application Insights (via either option above), you can query them directly in **Application Insights > Logs** using KQL. All span attributes are stored as JSON keys in the `customDimensions` column.
+
+### Table Mapping
+
+AgentOps spans map to App Insights tables based on their OpenTelemetry span kind:
+
+| Span | App Insights Table | Span Kind |
+|---|---|---|
+| `RUN <bundle>` (root eval run) | `requests` | `SERVER` |
+| `eval_item N` (per-row evaluation) | `dependencies` | `INTERNAL` |
+| `invoke_agent` / `chat` (agent/model call) | `dependencies` | `CLIENT` |
+| `evaluator <name>` (individual evaluator) | `dependencies` | `INTERNAL` |
+
+### Query 1: Slowest Evaluation Rows
+
+Find the top 10 slowest evaluation rows to identify performance bottlenecks.
+
+```kql
+dependencies
+| where customDimensions["cicd.pipeline.task.name"] == "eval_item"
+| extend
+    rowIndex = toint(customDimensions["agentops.eval.item.index"]),
+    input = tostring(customDimensions["agentops.eval.item.input"]),
+    passed = tostring(customDimensions["agentops.eval.item.passed"])
+| project timestamp, rowIndex, input, passed, duration, operation_Id
+| top 10 by duration desc
+```
+
+### Query 2: Failed Evaluators
+
+List all evaluator executions that failed their threshold, with scores and thresholds.
+
+```kql
+dependencies
+| where customDimensions["agentops.eval.evaluator.passed"] == "false"
+| extend
+    evaluator = tostring(customDimensions["agentops.eval.evaluator.builtin"]),
+    score = toreal(customDimensions["agentops.eval.evaluator.score"]),
+    threshold = toreal(customDimensions["agentops.eval.evaluator.threshold"]),
+    criteria = tostring(customDimensions["agentops.eval.evaluator.criteria"])
+| project timestamp, evaluator, score, threshold, criteria, operation_Id
+| order by timestamp desc
+```
+
+### Query 3: Pass Rate Over Time
+
+Track overall evaluation pass rate trends from root spans.
+
+```kql
+requests
+| where name startswith "RUN "
+| extend
+    passRate = toreal(customDimensions["agentops.eval.pass_rate"]),
+    bundle = tostring(customDimensions["cicd.pipeline.name"]),
+    dataset = tostring(customDimensions["agentops.eval.dataset"]),
+    itemsTotal = toint(customDimensions["agentops.eval.items_total"]),
+    itemsPassed = toint(customDimensions["agentops.eval.items_passed"])
+| project timestamp, bundle, dataset, passRate, itemsPassed, itemsTotal
+| order by timestamp asc
+| render timechart with (ycolumns=passRate, title="Evaluation Pass Rate Over Time")
+```
+
+### Query 4: Token Usage Per Run
+
+Sum input and output tokens across all agent/model invocations within each eval run.
+
+```kql
+dependencies
+| where customDimensions["gen_ai.operation.name"] in ("invoke_agent", "chat")
+| extend
+    inputTokens = toint(customDimensions["gen_ai.usage.input_tokens"]),
+    outputTokens = toint(customDimensions["gen_ai.usage.output_tokens"]),
+    model = tostring(customDimensions["gen_ai.request.model"])
+| summarize
+    totalInputTokens = sum(inputTokens),
+    totalOutputTokens = sum(outputTokens),
+    totalTokens = sum(inputTokens) + sum(outputTokens),
+    invocations = count()
+    by operation_Id, model
+| order by totalTokens desc
+```
+
+### Query 5: Evaluator Score Distribution
+
+View the distribution of scores grouped by evaluator name to identify consistently low-performing evaluators.
+
+```kql
+dependencies
+| where isnotempty(customDimensions["agentops.eval.evaluator.score"])
+| extend
+    evaluator = tostring(customDimensions["agentops.eval.evaluator.builtin"]),
+    score = toreal(customDimensions["agentops.eval.evaluator.score"])
+| summarize
+    avgScore = avg(score),
+    minScore = min(score),
+    maxScore = max(score),
+    p50 = percentile(score, 50),
+    p90 = percentile(score, 90),
+    count = count()
+    by evaluator
+| order by avgScore asc
+```
+
+---
+
 ## Evaluation Tracing vs. Agent Execution Tracing
 
 It is important to understand that AgentOps telemetry covers **evaluation observability** — not agent execution tracing. These are two different things:
