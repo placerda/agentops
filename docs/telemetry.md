@@ -347,9 +347,9 @@ Jaeger shows spans as horizontal bars on a timeline:
 
 ## Sending Traces to Azure Monitor
 
-For production, you may want traces in Azure Monitor / Application Insights instead of local Jaeger.
+For production, you may want traces in Azure Monitor / Application Insights instead of local Jaeger. The recommended path is the **OpenTelemetry Collector** running locally (or as a sidecar) with the Azure Monitor exporter.
 
-### Option A: Use the OTel Collector as a Proxy
+### Use the OTel Collector as a Proxy
 
 Run the [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) with an Azure Monitor exporter:
 
@@ -374,21 +374,20 @@ service:
 
 Then set `AGENTOPS_OTLP_ENDPOINT=http://localhost:4318`.
 
-### Option B: Use Azure Monitor's OTLP Endpoint Directly
+### Why not export from AgentOps directly?
 
-Azure Monitor now supports OTLP ingestion natively. Set the endpoint to your Application Insights OTLP ingestion URL:
+AgentOps ships a vanilla `OTLPSpanExporter` that POSTs `application/x-protobuf` to `<endpoint>/v1/traces` with no Authorization header. This is fine for any plain OTLP/HTTP backend (Jaeger, Tempo, the Collector, etc.), but it is **not** sufficient for Azure Monitor:
 
-```bash
-export AGENTOPS_OTLP_ENDPOINT=https://<region>.applicationinsights.azure.com
-```
+- The official Azure Monitor OpenTelemetry distro for Python (see [Microsoft Learn — OpenTelemetry configuration](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-configuration?tabs=python)) requires a **connection string** and is invoked via `configure_azure_monitor()`, not a raw OTLP endpoint.
+- Application Insights also has a preview feature (`Microsoft.Insights/OtlpApplicationInsights`) that exposes per-resource OTLP ingestion URLs, but it requires **Entra ID Bearer-token authentication** (scope `https://monitor.azure.com/.default`), which AgentOps's exporter does not currently inject.
 
-Refer to the [Azure Monitor OTLP documentation](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-configuration) for details.
+The Collector proxy avoids both issues: AgentOps speaks plain OTLP/HTTP to the Collector, and the Collector handles authentication to Azure Monitor.
 
 ---
 
 ## Querying Traces in Azure Monitor (KQL)
 
-Once eval traces land in Application Insights (via either option above), you can query them directly in **Application Insights > Logs** using KQL. All span attributes are stored as JSON keys in the `customDimensions` column.
+Once eval traces land in Application Insights via the Collector, you can query them directly in **Application Insights > Logs** using KQL. All span attributes are stored as JSON keys in the `customDimensions` column.
 
 ### Table Mapping
 
