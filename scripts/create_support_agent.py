@@ -207,8 +207,46 @@ def cmd_create(args: argparse.Namespace) -> int:
         f"(variant={args.variant}, model={args.model}).",
         file=sys.stderr,
     )
+
+    # Read back the registered tools so the user can confirm they are
+    # attached. The Foundry portal's Playground tab only surfaces tools
+    # added through the portal's "Add" button — SDK-registered tools are
+    # invisible there but DO get used at runtime. Printing them here
+    # avoids the "I created the agent but Tools is empty" confusion.
+    try:
+        fetched = client.agents.get_version(
+            agent_name=args.name, version=str(version_id)
+        )
+        definition = getattr(fetched, "definition", None)
+        raw_tools = (
+            getattr(definition, "tools", None)
+            if definition is not None
+            else None
+        ) or []
+        tool_names = []
+        for t in raw_tools:
+            n = getattr(t, "name", None)
+            if n is None and isinstance(t, dict):
+                n = t.get("name")
+            if n:
+                tool_names.append(n)
+        if tool_names:
+            print(
+                f"Registered tools: {', '.join(tool_names)}",
+                file=sys.stderr,
+            )
+    except Exception:  # noqa: BLE001 — read-back is best-effort
+        pass
+
     print(
         "Paste the identifier above into the 'agent:' field of agentops.yaml.",
+        file=sys.stderr,
+    )
+    print(
+        "Note: the Foundry portal's Playground 'Tools' panel only lists "
+        "tools added via the portal UI. SDK-registered tools (like these) "
+        "show up under the agent's 'Code' / 'YAML' tab and ARE invoked "
+        "at runtime — `agentops eval run` will exercise them.",
         file=sys.stderr,
     )
     return 0

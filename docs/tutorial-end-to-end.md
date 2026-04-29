@@ -112,7 +112,15 @@ into `agentops.yaml` next. The script:
 - Pins the system prompt to require tool use whenever the user asks
   about an order, a refund, or talking to a human.
 - Prints `support-bot:<version>` on stdout and a friendly summary on
-  stderr.
+  stderr (including a `Registered tools:` line so you can confirm
+  the attachment).
+
+> **Why don't I see the tools in the Playground?** The Foundry
+> portal's Playground tab only lists tools you added through the
+> portal's **Add** button. Tools registered through the SDK (like
+> these) show up under the agent's **Code** / **YAML** tab and are
+> invoked at runtime — `agentops eval run` exercises them either
+> way.
 
 > **Prefer the portal?** Open
 > [Azure AI Foundry](https://ai.azure.com) → your project → **Build →
