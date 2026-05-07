@@ -19,24 +19,15 @@ AgentOps CLI for evaluation, observability, and operational workflows for Micros
 
 ## Overview
 
-AgentOps Toolkit is a CLI built on Microsoft Foundry that standardizes evaluation and operational workflows for AI agents and models, helping teams run, monitor, and automate AgentOps processes.
+AgentOps Toolkit is a CLI built on Microsoft Foundry that standardizes evaluation workflows for AI agents and models, helping teams run and automate evaluations with consistent inputs and outputs.
 
 The project enables:
 
 - Consistent local and CI execution of agent evaluations
-- Reusable evaluation policies through bundles
-- Operational observability through tracing, monitoring, and run inspection
+- Automatic evaluator selection based on dataset shape (RAG, agent-with-tools, model quality)
 - Stable machine-readable outputs for automation
 - Human-readable reports for PR reviews and quality gates
-
-Operational capabilities include:
-
-- Standardized evaluation workflows
-- Run history and result inspection
-- Tracing and observability
-- Monitoring (dashboards and alerts)
-- CI/CD automation
-- Operational reporting and analysis
+- Baseline comparison to detect regressions across runs
 
 Core outputs:
 
@@ -51,104 +42,93 @@ Exit code contract:
 
 ## Quickstart
 
-<p align="center">
-<img alt="Quickstart demo: agentops init and eval run" src="https://github.com/Azure/agentops/raw/main/media/quickstart.gif"/>
-</p>
-
 ### 1) Install
 
 ```bash
 python -m venv .venv
-# activate your venv in the current shell
 python -m pip install -U pip
 python -m pip install agentops-toolkit
 ```
 
-### 2) Initialize and Configure
+### 2) Bootstrap
 
 ```bash
 agentops init
 ```
 
-This creates `.agentops/` with starter bundles, datasets, and run configs for common scenarios (model quality, RAG, agent workflow, content safety).
+This writes a single `agentops.yaml` at the project root and a tiny seed dataset at `.agentops/data/smoke.jsonl`. Edit `agentops.yaml` to point at your agent.
 
-Set your Foundry project endpoint:
+### 3) Configure your agent
+
+Pick one of these forms for the `agent:` field — AgentOps classifies the target automatically:
+
+```yaml
+agent: "my-rag:3"                          # Foundry prompt agent (name:version)
+agent: "https://...services.ai.azure.com/.../agents/<id>"  # Foundry hosted endpoint
+agent: "https://api.example.com/chat"      # any HTTP/JSON agent (ACA, AKS, custom)
+agent: "model:gpt-4o"                       # raw Foundry model deployment
+```
+
+Evaluators are inferred from the dataset shape (rows with `context` → RAG evaluators, rows with `tool_calls`/`tool_definitions` → agent-workflow evaluators). The full minimal config is:
+
+```yaml
+version: 1
+agent: "my-rag:3"
+dataset: .agentops/data/smoke.jsonl
+```
+
+### 4) Run
 
 ```bash
 export AZURE_AI_FOUNDRY_PROJECT_ENDPOINT="https://<resource>.services.ai.azure.com/api/projects/<project>"
-```
-
-Then edit `.agentops/run.yaml` to set your `agent_id` and `model` deployment name.
-
-> Authentication uses `DefaultAzureCredential` — run `az login` locally, or use service principal env vars in CI.
-
-### 3) Run Evaluation
-
-```bash
 agentops eval run
 ```
 
-Results are written to `.agentops/results/latest/`:
-- `results.json` — machine-readable scores
-- `report.md` — human-readable summary
+Outputs land in `.agentops/results/latest/`:
 
-To run a different scenario:
+- `results.json` — machine-readable (versioned, stable schema)
+- `report.md` — human-readable, PR-friendly
 
-```bash
-agentops eval run --config .agentops/run-rag.yaml
-```
-
-To regenerate the report from existing results:
+To compare against a previous run, pass `--baseline`:
 
 ```bash
-agentops report generate
+agentops eval run --baseline .agentops/results/baseline/results.json
 ```
 
-See [Concepts](https://github.com/Azure/agentops/blob/main/docs/concepts.md) for an overview of bundles, datasets, evaluators, backends, and the configuration model.
+The report grows a `Comparison vs Baseline` section with per-metric deltas.
+
+---
 
 ## Commands
 
-| Command | Description | Status |
-|---|---|---|
-| `agentops --version` | Show installed version | ✅ |
-| `agentops init [--path DIR]` | Scaffold project workspace, starter files, and coding agent skills | ✅ |
-| `agentops eval run [--config PATH]` | Evaluate a dataset against a bundle | ✅ |
-| `agentops eval compare --runs ID1,ID2` | Compare two past runs | ✅ |
-| `agentops report generate [--in FILE]` | Regenerate `report.md` from `results.json` | ✅ |
-| `agentops workflow generate` | Generate GitHub Actions workflow | ✅ |
-| `agentops skills install [--platform <p>]` | Install coding agent skills (Copilot, Claude) | ✅ |
-| `agentops run list\|show` | List or inspect past runs | 🚧 |
-| `agentops bundle list\|show` | Browse bundle catalog | 🚧 |
-| `agentops dataset validate\|describe` | Dataset utilities | 🚧 |
-| `agentops trace init` | Tracing setup | 🚧 |
-| `agentops monitor setup\|show\|configure` | Monitoring operations | 🚧 |
-
-Planned commands return a friendly message indicating they are not yet implemented.
+| Command | Description |
+|---|---|
+| `agentops --version` | Show installed version |
+| `agentops init` | Bootstrap `agentops.yaml` and a seed dataset |
+| `agentops eval run [--config PATH] [--baseline PATH]` | Run an evaluation |
+| `agentops report generate [--in FILE]` | Regenerate `report.md` from `results.json` |
+| `agentops workflow generate` | Generate GitHub Actions workflow |
+| `agentops skills install [--platform <p>]` | Install coding agent skills (Copilot, Claude) |
+| `agentops mcp serve` | Start the AgentOps MCP server (stdio). Requires `pip install agentops-toolkit[mcp]`. |
+| `agentops agent analyze` | Run the watchdog over your run history. Requires `pip install agentops-toolkit[agent]`. |
+| `agentops agent serve` | Start the watchdog as a FastAPI Copilot Extension. Requires `pip install agentops-toolkit[agent]`. |
 
 ## Documentation
 
-### Concepts and Architecture
-
-- [Concepts](https://github.com/Azure/agentops/blob/main/docs/concepts.md) — bundles, datasets, evaluators, backends, configuration model
-- [How It Works](https://github.com/Azure/agentops/blob/main/docs/how-it-works.md) — architecture, request flow, full schema reference
-- [Bundles](https://github.com/Azure/agentops/blob/main/docs/bundles.md) — bundle authoring and evaluator configuration
-
-### Tutorials
-
-- [Model-direct evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-model-direct.md)
-- [Foundry agent evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-basic-foundry-agent.md)
-- [RAG evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-rag.md)
-- [HTTP-deployed agent evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-http-agent.md)
-- [Conversational agent evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-conversational-agent.md)
-- [Agent workflow evaluation](https://github.com/Azure/agentops/blob/main/docs/tutorial-agent-workflow.md)
+- [Quickstart tutorial](https://github.com/Azure/agentops/blob/main/docs/tutorial-quickstart.md) — bootstrap a workspace and run one evaluation.
+- [End-to-end tutorial](https://github.com/Azure/agentops/blob/main/docs/tutorial-end-to-end.md) — full do-it-yourself tour: Foundry hosted agent, baseline comparison, GitFlow CI/CD, watchdog.
+- Per-scenario tutorials:
+  - [Foundry hosted agent](https://github.com/Azure/agentops/blob/main/docs/tutorial-basic-foundry-agent.md)
+  - [Model-direct](https://github.com/Azure/agentops/blob/main/docs/tutorial-model-direct.md)
+  - [RAG](https://github.com/Azure/agentops/blob/main/docs/tutorial-rag.md)
+  - [Conversational agent](https://github.com/Azure/agentops/blob/main/docs/tutorial-conversational-agent.md)
+  - [Agent with tool calling](https://github.com/Azure/agentops/blob/main/docs/tutorial-agent-workflow.md)
+  - [HTTP-deployed agent](https://github.com/Azure/agentops/blob/main/docs/tutorial-http-agent.md)
 - [Baseline comparison](https://github.com/Azure/agentops/blob/main/docs/tutorial-baseline-comparison.md)
-
-### Operations
-
+- [Watchdog agent](https://github.com/Azure/agentops/blob/main/docs/tutorial-agent-watchdog.md)
 - [CI/CD with GitHub Actions](https://github.com/Azure/agentops/blob/main/docs/ci-github-actions.md)
-- [Copilot skills installation](https://github.com/Azure/agentops/blob/main/docs/tutorial-copilot-skills.md)
-- [Release process](https://github.com/Azure/agentops/blob/main/docs/release-process.md)
 - [Built-in evaluator reference](https://github.com/Azure/agentops/blob/main/docs/foundry-evaluation-sdk-built-in-evaluators.md)
+- [Release process](https://github.com/Azure/agentops/blob/main/docs/release-process.md)
 
 ## Contributing
 

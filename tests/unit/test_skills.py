@@ -28,9 +28,6 @@ _COPILOT_SKILL_PATHS = [
     ".github/skills/agentops-config/SKILL.md",
     ".github/skills/agentops-dataset/SKILL.md",
     ".github/skills/agentops-report/SKILL.md",
-    ".github/skills/agentops-regression/SKILL.md",
-    ".github/skills/agentops-trace/SKILL.md",
-    ".github/skills/agentops-monitor/SKILL.md",
     ".github/skills/agentops-workflow/SKILL.md",
 ]
 
@@ -39,9 +36,6 @@ _CLAUDE_SKILL_PATHS = [
     ".claude/commands/agentops-config.md",
     ".claude/commands/agentops-dataset.md",
     ".claude/commands/agentops-report.md",
-    ".claude/commands/agentops-regression.md",
-    ".claude/commands/agentops-trace.md",
-    ".claude/commands/agentops-monitor.md",
     ".claude/commands/agentops-workflow.md",
 ]
 
@@ -93,7 +87,7 @@ def test_install_creates_copilot_files(tmp_path: Path) -> None:
     result = install_skills(directory=tmp_path, platforms=["copilot"])
 
     assert result.platforms == ["copilot"]
-    assert len(result.created_files) == 8
+    assert len(result.created_files) == 5
     assert len(result.skipped_files) == 0
 
     for rel in _COPILOT_SKILL_PATHS:
@@ -120,7 +114,7 @@ def test_install_creates_claude_files(tmp_path: Path) -> None:
     result = install_skills(directory=tmp_path, platforms=["claude"])
 
     assert result.platforms == ["claude"]
-    assert len(result.created_files) == 8
+    assert len(result.created_files) == 5
 
     for rel in _CLAUDE_SKILL_PATHS:
         skill_file = tmp_path / rel
@@ -143,7 +137,7 @@ def test_claude_files_strip_frontmatter(tmp_path: Path) -> None:
 
 def test_install_multi_platform(tmp_path: Path) -> None:
     result = install_skills(directory=tmp_path, platforms=["copilot", "claude"])
-    assert len(result.created_files) == 16  # 8 per platform
+    assert len(result.created_files) == 10  # 5 per platform
     assert result.platforms == ["copilot", "claude"]
 
 
@@ -160,7 +154,7 @@ def test_install_skips_existing(tmp_path: Path) -> None:
 
     result = install_skills(directory=tmp_path, platforms=["copilot"], force=False)
 
-    assert len(result.skipped_files) == 8
+    assert len(result.skipped_files) == 5
     assert len(result.created_files) == 0
     assert skill.read_text(encoding="utf-8") == "custom content"
 
@@ -173,7 +167,7 @@ def test_install_overwrites_with_force(tmp_path: Path) -> None:
 
     result = install_skills(directory=tmp_path, platforms=["copilot"], force=True)
 
-    assert len(result.overwritten_files) == 8
+    assert len(result.overwritten_files) == 5
     content = skill.read_text(encoding="utf-8")
     assert content != "custom content"
     assert "AgentOps" in content
@@ -242,7 +236,7 @@ def test_cli_init_does_not_install_skills(tmp_path: Path) -> None:
     result = runner.invoke(app, ["init", "--dir", str(tmp_path)])
 
     assert result.exit_code == 0
-    assert "Initialized workspace" in result.stdout
+    assert "Initialized AgentOps workspace" in result.stdout
     assert "agentops skills install" in result.stdout
 
     # Skills should NOT be created during init
@@ -757,3 +751,4 @@ def test_cli_skills_install_from_invalid_ref(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 1
+

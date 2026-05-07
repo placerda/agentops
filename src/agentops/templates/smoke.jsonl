@@ -1,0 +1,3 @@
+{"input": "What is AgentOps?", "expected": "AgentOps is a CLI for evaluating Foundry agents."}
+{"input": "Which formats does it produce?", "expected": "It writes results.json and report.md."}
+{"input": "How do I configure thresholds?", "expected": "Use the 'thresholds' map in agentops.yaml."}

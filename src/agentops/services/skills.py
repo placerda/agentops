@@ -20,9 +20,6 @@ _SKILLS: tuple[str, ...] = (
     "skills/agentops-config/SKILL.md",
     "skills/agentops-dataset/SKILL.md",
     "skills/agentops-report/SKILL.md",
-    "skills/agentops-regression/SKILL.md",
-    "skills/agentops-trace/SKILL.md",
-    "skills/agentops-monitor/SKILL.md",
     "skills/agentops-workflow/SKILL.md",
 )
 
@@ -53,41 +50,35 @@ _COPILOT_MARKER_END = "<!-- agentops-skills-end -->"
 _COPILOT_BLOCK = f"""{_COPILOT_MARKER_START}
 ## AgentOps Evaluation & Operations
 
-This project uses AgentOps for agent evaluation, monitoring, and benchmarking.
-When the user asks about any of the topics below, read the corresponding skill
-file **before** responding and follow its workflow step by step.
+This project uses AgentOps for agent evaluation and benchmarking. When the
+user asks about any of the topics below, read the corresponding skill file
+**before** responding and follow its workflow step by step.
 
 | Topic | Skill File | Trigger phrases |
 |---|---|---|
-| Run evaluations, benchmark, compare models | `.github/skills/agentops-eval/SKILL.md` | "run eval", "evaluate", "benchmark", "compare models" |
-| Generate run.yaml configuration | `.github/skills/agentops-config/SKILL.md` | "configure", "run.yaml", "set up eval", "which bundle" |
+| Run evaluations, benchmark, compare runs | `.github/skills/agentops-eval/SKILL.md` | "run eval", "evaluate", "benchmark", "compare runs" |
+| Generate agentops.yaml configuration | `.github/skills/agentops-config/SKILL.md` | "configure", "agentops.yaml", "set up eval" |
 | Generate evaluation datasets | `.github/skills/agentops-dataset/SKILL.md` | "create dataset", "generate test data", "JSONL" |
 | Interpret and regenerate reports | `.github/skills/agentops-report/SKILL.md` | "report", "results", "explain scores" |
-| Investigate regressions | `.github/skills/agentops-regression/SKILL.md` | "regression", "score dropped", "why worse" |
-| Tracing and observability | `.github/skills/agentops-trace/SKILL.md` | "trace", "tracing", "spans", "telemetry" |
-| Monitoring and alerts | `.github/skills/agentops-monitor/SKILL.md` | "monitor", "alerts", "dashboard" |
 | CI/CD workflow setup | `.github/skills/agentops-workflow/SKILL.md` | "CI", "workflow", "pipeline", "GitHub Actions" |
 {_COPILOT_MARKER_END}"""
 
 _CURSOR_MDC = """\
 ---
-description: AgentOps evaluation, monitoring, and benchmarking tools
+description: AgentOps evaluation and benchmarking tools
 globs: "**"
 alwaysApply: true
 ---
 
-When the user asks about evaluations, benchmarks, tracing, or monitoring,
+When the user asks about evaluations, benchmarks, datasets, or reports,
 read the corresponding skill file and follow its workflow step by step.
 
 | Topic | Skill File |
 |---|---|
-| Run evaluations, benchmark, compare models | `.github/skills/agentops-eval/SKILL.md` |
-| Generate run.yaml configuration | `.github/skills/agentops-config/SKILL.md` |
+| Run evaluations, benchmark, compare runs | `.github/skills/agentops-eval/SKILL.md` |
+| Generate agentops.yaml configuration | `.github/skills/agentops-config/SKILL.md` |
 | Generate evaluation datasets | `.github/skills/agentops-dataset/SKILL.md` |
 | Interpret and regenerate reports | `.github/skills/agentops-report/SKILL.md` |
-| Investigate regressions | `.github/skills/agentops-regression/SKILL.md` |
-| Tracing and observability | `.github/skills/agentops-trace/SKILL.md` |
-| Monitoring and alerts | `.github/skills/agentops-monitor/SKILL.md` |
 | CI/CD workflow setup | `.github/skills/agentops-workflow/SKILL.md` |
 """
 

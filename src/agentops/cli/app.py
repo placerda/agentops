@@ -1,15 +1,13 @@
 from __future__ import annotations
 
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from agentops.cli.browse_commands import (
-    bundle_app,
-    run_app,
-)
-from agentops.services.reporting import generate_report_from_results
+from agentops.utils.colors import style
 from agentops.utils.logging import get_logger, setup_logging
 
 app = typer.Typer(
@@ -24,25 +22,23 @@ eval_app = typer.Typer(
         "`--config` (`-c`) and `--output` (`-o`)."
     )
 )
-dataset_app = typer.Typer(help="Dataset utility commands.")
-config_app = typer.Typer(help="Configuration utility commands.")
 report_app = typer.Typer(help="Reporting commands.")
 workflow_app = typer.Typer(help="CI/CD workflow commands.")
-monitor_app = typer.Typer(help="Monitoring setup and operations.")
-model_app = typer.Typer(help="Model discovery commands.")
-agent_app = typer.Typer(help="Agent discovery commands.")
 skills_app = typer.Typer(help="Coding agent skills management.")
+mcp_app = typer.Typer(help="MCP (Model Context Protocol) server commands.")
+agent_app = typer.Typer(
+    help=(
+        "Watchdog agent commands. Combine AgentOps eval history, Azure Monitor "
+        "traces, and Foundry control-plane data to surface regressions, "
+        "latency, error, and safety findings."
+    )
+)
 app.add_typer(eval_app, name="eval")
-app.add_typer(run_app, name="run")
-app.add_typer(bundle_app, name="bundle")
-app.add_typer(dataset_app, name="dataset")
-app.add_typer(config_app, name="config")
 app.add_typer(report_app, name="report")
 app.add_typer(workflow_app, name="workflow")
-app.add_typer(monitor_app, name="monitor")
-app.add_typer(model_app, name="model")
-app.add_typer(agent_app, name="agent")
 app.add_typer(skills_app, name="skills")
+app.add_typer(mcp_app, name="mcp")
+app.add_typer(agent_app, name="agent")
 
 log = get_logger(__name__)
 DEFAULT_REPORT_INPUT = Path(".agentops/results/latest/results.json")
@@ -94,15 +90,6 @@ def _print_registration_result(result: object) -> None:
         typer.echo(f" * registered skills in {path}")
 
 
-def _planned_command(command_name: str) -> None:
-    typer.echo(
-        "This command is planned but not implemented in this release:\n"
-        f"  {command_name}\n"
-        "Please use the currently available commands (`init`, `eval run`, `report generate`) for now."
-    )
-    raise typer.Exit(code=1)
-
-
 # ---------------------------------------------------------------------------
 # Global callback — configures logging before any command runs
 # ---------------------------------------------------------------------------
@@ -152,33 +139,29 @@ def cmd_init(
         help="Workspace directory to initialise.",
     ),
 ) -> None:
-    """Initialise an AgentOps workspace (creates .agentops/)."""
-    from agentops.services.initializer import initialize_workspace
+    """Initialise an AgentOps workspace.
+
+    Bootstraps the 1.0 minimal layout: a single ``agentops.yaml`` at the
+    project root and a tiny seed dataset under ``.agentops/data/smoke.jsonl``.
+    """
+    from agentops.services.initializer import initialize_flat_workspace
 
     log.debug("cmd_init called force=%s dir=%s", force, directory)
     try:
-        result = initialize_workspace(directory=directory, force=force)
+        result = initialize_flat_workspace(directory=directory, force=force)
     except Exception as exc:
         typer.echo(f"Error: failed to initialize workspace: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"Initialized workspace: {result.workspace_dir}")
-    typer.echo(
-        "Summary: "
-        f"created_dirs={len(result.created_dirs)}, "
-        f"created_files={len(result.created_files)}, "
-        f"overwritten_files={len(result.overwritten_files)}, "
-        f"skipped_files={len(result.skipped_files)}"
-    )
-
+    typer.echo("Initialized AgentOps workspace.")
     for created in result.created_files:
         typer.echo(f" + created {created}")
     for overwritten in result.overwritten_files:
         typer.echo(f" ~ overwritten {overwritten}")
     for skipped in result.skipped_files:
         typer.echo(f" - skipped {skipped}")
-
     typer.echo("")
+    typer.echo("Edit agentops.yaml to point at your agent, then run: agentops eval run")
     typer.echo("To install coding agent skills, run: agentops skills install")
 
 
@@ -194,106 +177,181 @@ def cmd_eval_run(
         typer.Option(
             "--config",
             "-c",
-            help="Path to run.yaml (default: .agentops/run.yaml).",
+            help="Path to agentops.yaml. Defaults to ./agentops.yaml.",
         ),
     ] = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Output directory for results."),
     ] = None,
-    report_format: Annotated[
-        str, typer.Option("--format", "-f", help="Report format: md, html, or all.")
-    ] = "md",
-) -> None:
-    """Run an evaluation defined in a run.yaml file."""
-    from agentops.services.runner import run_evaluation
-
-    if report_format not in ("md", "html", "all"):
-        typer.echo("Error: --format must be md, html, or all.", err=True)
-        raise typer.Exit(code=1)
-
-    log.debug(
-        "cmd_eval_run called config=%s output=%s format=%s",
-        config,
-        output,
-        report_format,
-    )
-    try:
-        run_result = run_evaluation(
-            config_path=config, output_override=output, report_format=report_format
-        )
-    except Exception as exc:
-        typer.echo(f"Error: evaluation failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-
-    typer.echo(f"Evaluation output directory: {run_result.output_dir}")
-    typer.echo(f"results.json: {run_result.results_path}")
-    typer.echo(f"report: {run_result.report_path}")
-
-    if run_result.exit_code == 2:
-        typer.echo("Threshold status: FAILED")
-        raise typer.Exit(code=2)
-
-    typer.echo("Threshold status: PASSED")
-
-
-@eval_app.command("compare")
-def cmd_eval_compare(
-    runs: Annotated[
-        str,
-        typer.Option(
-            "--runs", help="Comma-separated run ids (example: ID1,ID2 or ID1,ID2,ID3)."
-        ),
-    ],
-    output: Annotated[
+    baseline: Annotated[
         Path | None,
-        typer.Option("--output", "-o", help="Output directory for comparison results."),
+        typer.Option(
+            "--baseline",
+            help="Path to a previous results.json to compare this run against.",
+        ),
     ] = None,
     report_format: Annotated[
         str, typer.Option("--format", "-f", help="Report format: md, html, or all.")
     ] = "md",
 ) -> None:
-    """Compare two or more past evaluation runs."""
-    from agentops.services.comparison import run_comparison
-
+    """Run an evaluation defined in agentops.yaml."""
     if report_format not in ("md", "html", "all"):
         typer.echo("Error: --format must be md, html, or all.", err=True)
         raise typer.Exit(code=1)
 
-    parts = [p.strip() for p in runs.split(",")]
-    if len(parts) < 2:
+    config_path = _resolve_eval_config_path(config)
+    log.debug(
+        "cmd_eval_run called config=%s output=%s format=%s baseline=%s",
+        config_path,
+        output,
+        report_format,
+        baseline,
+    )
+
+    if not config_path.exists():
         typer.echo(
-            "Error: --runs must contain at least two comma-separated run ids.", err=True
+            f"Error: config not found at {config_path}. "
+            "Run `agentops init` to scaffold a starter agentops.yaml.",
+            err=True,
         )
         raise typer.Exit(code=1)
 
-    log.debug(
-        "cmd_eval_compare called runs=%s output=%s format=%s",
-        parts,
-        output,
-        report_format,
+    _run_flat_schema_eval(
+        config_path=config_path,
+        output=output,
+        baseline=baseline,
     )
+
+
+def _resolve_eval_config_path(config: Path | None) -> Path:
+    if config is not None:
+        return config
+    return Path("agentops.yaml")
+
+
+def _run_flat_schema_eval(
+    *,
+    config_path: Path,
+    output: Path | None,
+    baseline: Path | None,
+) -> None:
+    from agentops.core.config_loader import load_agentops_config
+    from agentops.pipeline.orchestrator import (
+        RunOptions,
+        exit_code_from,
+        run_evaluation,
+    )
+
     try:
-        result = run_comparison(
-            run_ids=parts,
-            output_dir=output,
-            report_format=report_format,
-        )
+        config_obj = load_agentops_config(config_path)
     except Exception as exc:
-        typer.echo(f"Error: comparison failed: {exc}", err=True)
+        typer.echo(f"Error: failed to load {config_path}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"comparison.json: {result.comparison_json_path}")
-    if result.comparison_md_path:
-        typer.echo(f"comparison.md: {result.comparison_md_path}")
-    if result.comparison_html_path:
-        typer.echo(f"comparison.html: {result.comparison_html_path}")
+    use_default_layout = output is None
+    if use_default_layout:
+        output_dir: Path = _default_flat_output_dir(config_path)
+    else:
+        assert output is not None
+        output_dir = output
 
-    if result.has_regressions:
-        typer.echo("Comparison verdict: REGRESSIONS DETECTED")
-        raise typer.Exit(code=2)
+    options = RunOptions(
+        config_path=config_path.resolve(),
+        output_dir=output_dir,
+        baseline_path=baseline.resolve() if baseline else None,
+        progress=lambda msg: typer.echo(msg),
+    )
 
-    typer.echo("Comparison verdict: NO REGRESSIONS")
+    try:
+        result = run_evaluation(config_obj, options=options)
+    except Exception as exc:
+        typer.echo(f"Error: evaluation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    latest_dir = config_path.parent / ".agentops" / "results" / "latest"
+    if output_dir.resolve() != latest_dir.resolve():
+        try:
+            _mirror_to_latest(output_dir, latest_dir)
+        except Exception as exc:  # pragma: no cover - mirror failures shouldn't fail the run
+            typer.echo(
+                f"Warning: failed to update {latest_dir}: {exc}",
+                err=True,
+            )
+            latest_dir = None  # type: ignore[assignment]
+    else:
+        latest_dir = None  # type: ignore[assignment]
+
+    typer.echo(f"Evaluation output directory: {style(str(output_dir), 'cyan')}")
+    typer.echo(f"results.json: {style(str(output_dir / 'results.json'), 'cyan')}")
+    typer.echo(f"report.md:    {style(str(output_dir / 'report.md'), 'cyan')}")
+    if latest_dir is not None:
+        typer.echo(f"latest/:      {style(str(latest_dir), 'cyan')}")
+    if result.summary.overall_passed:
+        typer.echo(f"Threshold status: {style('PASSED', 'bold', 'green')}")
+        return
+    typer.echo(f"Threshold status: {style('FAILED', 'bold', 'red')}")
+    raise typer.Exit(code=exit_code_from(result))
+
+
+def _default_flat_output_dir(config_path: Path) -> Path:
+    base = config_path.parent / ".agentops" / "results"
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+    return base / timestamp
+
+
+def _mirror_to_latest(source: Path, latest: Path) -> None:
+    """Replace ``latest`` with a copy of ``source``."""
+    if latest.exists():
+        if latest.is_symlink() or latest.is_file():
+            latest.unlink()
+        else:
+            shutil.rmtree(latest)
+    shutil.copytree(source, latest)
+
+
+def _is_flat_results(results_path: Path) -> bool:
+    """Return True when results.json was produced by the flat pipeline."""
+    if not results_path.exists():
+        return False
+    try:
+        import json as _json
+        data = _json.loads(results_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    target = data.get("target")
+    return (
+        data.get("version") == 1
+        and isinstance(target, dict)
+        and "kind" in target
+        and "bundle" not in data
+    )
+
+
+def _regenerate_flat_report(
+    *,
+    results_path: Path,
+    output_path: Path | None,
+    report_format: str,
+) -> Path:
+    """Render report.md from a flat-pipeline results.json."""
+    import json as _json
+
+    from agentops.core.results import RunResult
+    from agentops.pipeline import reporter as flat_reporter
+
+    if report_format not in ("md", "all"):
+        raise ValueError(
+            "Only --format md is supported (got %r)" % report_format
+        )
+    payload = _json.loads(results_path.read_text(encoding="utf-8"))
+    result = RunResult.model_validate(payload)
+    target = output_path or (results_path.parent / "report.md")
+    target.write_text(flat_reporter.render(result), encoding="utf-8")
+    return target
+
 
 
 # ---------------------------------------------------------------------------
@@ -318,12 +376,12 @@ def cmd_report_generate(
         typer.Option("--out", help="Output path for report."),
     ] = None,
     report_format: Annotated[
-        str, typer.Option("--format", "-f", help="Report format: md, html, or all.")
+        str, typer.Option("--format", "-f", help="Report format: md (default).")
     ] = "md",
 ) -> None:
-    """Regenerate report from a results.json file."""
-    if report_format not in ("md", "html", "all"):
-        typer.echo("Error: --format must be md, html, or all.", err=True)
+    """Regenerate report.md from a results.json file."""
+    if report_format not in ("md", "all"):
+        typer.echo("Error: --format must be md or all.", err=True)
         raise typer.Exit(code=1)
 
     resolved_results_in = results_in or DEFAULT_REPORT_INPUT
@@ -333,8 +391,23 @@ def cmd_report_generate(
         report_out,
         report_format,
     )
+
+    if not resolved_results_in.exists():
+        typer.echo(
+            f"Error: results not found at {resolved_results_in}.", err=True
+        )
+        raise typer.Exit(code=1)
+
+    if not _is_flat_results(resolved_results_in):
+        typer.echo(
+            f"Error: {resolved_results_in} is not an AgentOps 1.0 results.json. "
+            "Re-run `agentops eval run` to regenerate it.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     try:
-        report_result = generate_report_from_results(
+        output_path = _regenerate_flat_report(
             results_path=resolved_results_in,
             output_path=report_out,
             report_format=report_format,
@@ -343,52 +416,8 @@ def cmd_report_generate(
         typer.echo(f"Error: report generation failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"Loaded results: {report_result.input_results_path}")
-    typer.echo(f"Generated report: {report_result.output_report_path}")
-    if report_result.html_report_path:
-        typer.echo(f"Generated report: {report_result.html_report_path}")
-
-
-@report_app.command("show")
-def cmd_report_show() -> None:
-    """View reports in table format (planned)."""
-    _planned_command("agentops report show")
-
-
-@report_app.command("export")
-def cmd_report_export() -> None:
-    """Export reports in JSON/Markdown/CSV formats (planned)."""
-    _planned_command("agentops report export")
-
-
-@dataset_app.command("validate")
-def cmd_dataset_validate() -> None:
-    """Validate dataset files (planned)."""
-    _planned_command("agentops dataset validate")
-
-
-@dataset_app.command("describe")
-def cmd_dataset_describe() -> None:
-    """Describe dataset schema and shape (planned)."""
-    _planned_command("agentops dataset describe")
-
-
-@dataset_app.command("import")
-def cmd_dataset_import() -> None:
-    """Import external datasets (planned)."""
-    _planned_command("agentops dataset import")
-
-
-@config_app.command("validate")
-def cmd_config_validate() -> None:
-    """Validate configuration files (planned)."""
-    _planned_command("agentops config validate")
-
-
-@config_app.command("show")
-def cmd_config_show() -> None:
-    """Show merged runtime config (planned)."""
-    _planned_command("agentops config show")
+    typer.echo(f"Loaded results: {resolved_results_in}")
+    typer.echo(f"Generated report: {output_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -406,18 +435,50 @@ def cmd_workflow_generate(
         "--dir",
         help="Target repository root directory.",
     ),
+    kinds: str = typer.Option(
+        "",
+        "--kinds",
+        help=(
+            "Comma-separated subset of workflow kinds to generate. "
+            "Valid values: pr, dev, qa, prod. "
+            "Default (empty) generates all four."
+        ),
+    ),
 ) -> None:
-    """Generate GitHub Actions workflows for AgentOps evaluation.
+    """Generate the AgentOps GitFlow GitHub Actions workflows.
 
-    Auto-detects which pipelines to create based on the .agentops/ workspace:
-    PR evaluation (always), CI evaluation (multiple configs), and CD pipeline
-    with safety QA gate + deploy placeholder (multiple configs).
+    By default writes all four templates that map to a classic GitFlow
+    setup with three GitHub Environments (dev, qa, production):
+
+      - agentops-pr.yml          (PR gate; PRs to develop, release/**, main)
+      - agentops-deploy-dev.yml  (push to develop  -> environment: dev)
+      - agentops-deploy-qa.yml   (push to release/** -> environment: qa)
+      - agentops-deploy-prod.yml (push to main      -> environment: production)
+
+    Use --kinds to opt into a subset, e.g. --kinds pr,dev.
     """
-    from agentops.services.cicd import generate_cicd_workflows
+    from agentops.services.cicd import ALL_KINDS, generate_cicd_workflows
 
-    log.debug("cmd_workflow_generate called force=%s dir=%s", force, directory)
+    log.debug(
+        "cmd_workflow_generate called force=%s dir=%s kinds=%r", force, directory, kinds
+    )
+
+    selected: list[str] | None = None
+    if kinds.strip():
+        selected = [k.strip() for k in kinds.split(",") if k.strip()]
+        invalid = [k for k in selected if k not in ALL_KINDS]
+        if invalid:
+            typer.echo(
+                f"Error: unknown --kinds value(s): {', '.join(invalid)}. "
+                f"Valid: {', '.join(ALL_KINDS)}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
     try:
-        result = generate_cicd_workflows(directory=directory, force=force)
+        result = generate_cicd_workflows(
+            directory=directory, force=force, kinds=selected
+        )
     except Exception as exc:
         typer.echo(f"Error: failed to generate CI/CD workflows: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -433,47 +494,28 @@ def cmd_workflow_generate(
         typer.echo("")
         typer.echo("Next steps:")
         typer.echo(
-            "  1. Set GitHub repository variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID"
+            "  1. Configure Azure Workload Identity Federation (OIDC) and set "
+            "repository variables AZURE_CLIENT_ID, AZURE_TENANT_ID, "
+            "AZURE_SUBSCRIPTION_ID, AZURE_AI_FOUNDRY_PROJECT_ENDPOINT."
         )
         typer.echo(
-            "  2. Set GitHub repository secret: AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"
+            "  2. Create three GitHub Environments: 'dev', 'qa', 'production'. "
+            "Add required reviewers to 'production'."
         )
         typer.echo(
-            "  3. Configure Azure Workload Identity Federation (see docs/ci-github-actions.md)"
+            "  3. Open each agentops-deploy-*.yml and replace the Build/Deploy "
+            "placeholder steps with your stack's commands "
+            "(snippets are provided in comments)."
         )
-        typer.echo("  4. Commit and push the workflow files")
+        typer.echo(
+            "  4. In Settings -> Branches, require the 'AgentOps PR' status check "
+            "on develop and main."
+        )
+        typer.echo(
+            "  5. Commit and push. See docs/ci-github-actions.md for the full guide."
+        )
     elif result.skipped_files:
         typer.echo("No files written. Use --force to overwrite existing workflows.")
-
-
-@monitor_app.command("setup")
-def cmd_monitor_setup() -> None:
-    """Set up monitoring resources (planned)."""
-    _planned_command("agentops monitor setup")
-
-
-@monitor_app.command("show")
-def cmd_monitor_show() -> None:
-    """Show monitoring dashboard setup instructions (planned)."""
-    _planned_command("agentops monitor show")
-
-
-@monitor_app.command("configure")
-def cmd_monitor_configure() -> None:
-    """Configure monitoring alerts (planned)."""
-    _planned_command("agentops monitor configure")
-
-
-@model_app.command("list")
-def cmd_model_list() -> None:
-    """List chat-capable models in Foundry project (planned)."""
-    _planned_command("agentops model list")
-
-
-@agent_app.command("list")
-def cmd_agent_list() -> None:
-    """List agents in Foundry project (planned)."""
-    _planned_command("agentops agent list")
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +626,252 @@ def cmd_skills_install(
         typer.echo(f"Warning: failed to register skills: {exc}", err=True)
     else:
         _print_registration_result(reg_result)
+
+
+# ---------------------------------------------------------------------------
+# agentops mcp serve
+# ---------------------------------------------------------------------------
+
+
+@mcp_app.command("serve")
+def cmd_mcp_serve() -> None:
+    """Start the AgentOps MCP server on stdio.
+
+    Exposes the AgentOps workflow (init, eval run, report show, results
+    summary, dataset add, list runs, workflow init) as MCP tools so that
+    MCP-aware coding agents can drive AgentOps directly.
+
+    Requires the optional ``mcp`` extra:
+
+        pip install agentops-toolkit[mcp]
+    """
+    try:
+        from agentops.mcp.server import serve_stdio
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        serve_stdio()
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+# ---------------------------------------------------------------------------
+# `agentops agent` commands
+# ---------------------------------------------------------------------------
+
+
+def _resolve_agent_config_path(workspace: Path, explicit: Path | None) -> Path | None:
+    if explicit is not None:
+        return explicit
+    candidate = workspace / ".agentops" / "agent.yaml"
+    return candidate if candidate.exists() else None
+
+
+@agent_app.command("analyze")
+def cmd_agent_analyze(
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Project root containing `.agentops/`.",
+        ),
+    ] = Path("."),
+    config_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Path to `agent.yaml` (default: `.agentops/agent.yaml`).",
+        ),
+    ] = None,
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            "-o",
+            help="Where to write the Markdown report.",
+        ),
+    ] = Path(".agentops/agent/report.md"),
+    lookback_days: Annotated[
+        int | None,
+        typer.Option(
+            "--lookback-days",
+            help="Override the lookback window for production telemetry.",
+        ),
+    ] = None,
+    severity_fail: Annotated[
+        str,
+        typer.Option(
+            "--severity-fail",
+            help="Exit 2 when a finding at or above this severity is produced.",
+        ),
+    ] = "critical",
+    categories: Annotated[
+        str | None,
+        typer.Option(
+            "--categories",
+            help=(
+                "Comma-separated list of categories to include "
+                "(quality, performance, reliability, security). "
+                "Default: include all."
+            ),
+        ),
+    ] = None,
+    exclude_rules: Annotated[
+        str | None,
+        typer.Option(
+            "--exclude-rules",
+            help=(
+                "Comma-separated list of posture rule ids to skip "
+                "(for example `waf.security.diagnostic_settings`)."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Run the watchdog agent analyzer and emit a Markdown report.
+
+    Exit codes:
+
+    * ``0`` — analyzer ran cleanly and no finding met `--severity-fail`.
+    * ``2`` — at least one finding meets the configured severity floor.
+    * ``1`` — runtime/configuration error.
+    """
+    from agentops.agent.analyzer import analyze
+    from agentops.agent.config import load_agent_config
+    from agentops.agent.findings import Severity
+    from agentops.agent.report import render_report
+
+    workspace = workspace.resolve()
+    resolved_config = _resolve_agent_config_path(workspace, config_path)
+
+    try:
+        config = load_agent_config(resolved_config)
+    except Exception as exc:
+        typer.echo(f"Error loading agent config: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if lookback_days is not None:
+        config = config.model_copy(update={"lookback_days": lookback_days})
+
+    try:
+        severity_floor = Severity(severity_fail.lower())
+    except ValueError as exc:
+        typer.echo(
+            f"Error: invalid --severity-fail '{severity_fail}'. "
+            "Use one of: info, warning, critical.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    try:
+        result = analyze(
+            workspace,
+            config,
+            categories=(
+                [c for c in categories.split(",") if c.strip()]
+                if categories
+                else None
+            ),
+            exclude_rules=(
+                [r for r in exclude_rules.split(",") if r.strip()]
+                if exclude_rules
+                else None
+            ),
+        )
+    except Exception as exc:  # pragma: no cover
+        typer.echo(f"Error running analyzer: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    out_path = out if out.is_absolute() else workspace / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(render_report(result), encoding="utf-8")
+
+    typer.echo(f"Wrote {out_path}")
+    typer.echo(f"Findings: {len(result.findings)}")
+    if result.max_severity is not None:
+        typer.echo(f"Max severity: {result.max_severity.value}")
+
+    if result.max_severity is not None and result.max_severity >= severity_floor:
+        raise typer.Exit(code=2)
+
+
+@agent_app.command("serve")
+def cmd_agent_serve(
+    host: Annotated[
+        str, typer.Option("--host", help="Bind host.")
+    ] = "0.0.0.0",
+    port: Annotated[
+        int, typer.Option("--port", help="Bind port.")
+    ] = 8080,
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Project root for analysis."),
+    ] = Path("."),
+    config_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Path to `agent.yaml` (default: `.agentops/agent.yaml`).",
+        ),
+    ] = None,
+    no_verify: Annotated[
+        bool,
+        typer.Option(
+            "--no-verify",
+            help="Skip Copilot Extensions signature validation (dev only).",
+        ),
+    ] = False,
+    workers: Annotated[
+        int, typer.Option("--workers", help="Uvicorn worker count.")
+    ] = 1,
+) -> None:
+    """Start the watchdog agent as a Copilot Extension HTTP server.
+
+    Exposes ``POST /agents/messages`` (Copilot Extensions protocol),
+    ``GET /healthz`` and ``GET /``. Requires the ``[agent]`` extra:
+
+        pip install agentops-toolkit[agent]
+    """
+    try:
+        import uvicorn
+    except ImportError as exc:
+        typer.echo(
+            "Error: agent extras not installed. "
+            "Run `pip install agentops-toolkit[agent]`.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    from agentops.agent.config import load_agent_config
+    from agentops.agent.server.app import create_app
+
+    workspace = workspace.resolve()
+    resolved_config = _resolve_agent_config_path(workspace, config_path)
+
+    try:
+        config = load_agent_config(resolved_config)
+    except Exception as exc:
+        typer.echo(f"Error loading agent config: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    fastapi_app = create_app(
+        workspace=workspace,
+        config=config,
+        verify_signature=not no_verify,
+    )
+
+    if no_verify:
+        typer.echo(
+            "WARNING: Copilot Extensions signature validation is disabled. "
+            "Use only for local development."
+        )
+
+    uvicorn.run(fastapi_app, host=host, port=port, workers=workers)
 
 
 def main() -> None:
