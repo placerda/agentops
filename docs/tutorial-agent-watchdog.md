@@ -11,6 +11,9 @@ sources:
    queried via KQL.
 3. **Foundry control plane** — agent metadata and recent runs read
    through `azure-ai-projects`.
+4. **Azure resource posture** — a read-only WAF-AI Security pillar audit
+   of the Cognitive Services / Azure OpenAI account that hosts the agent
+   and judge model.
 
 The agent runs the same checks (regression, latency, errors, safety)
 in three form factors:
@@ -67,13 +70,19 @@ Exit codes are CI-friendly:
 - `2` — a finding meets the configured `--severity-fail` floor
 - `1` — runtime / configuration error
 
-## 2b. Security posture audit (WAF-AI)
+## 3. Security posture audit (WAF-AI)
 
 The watchdog can also run a **read-only audit of the Azure footprint**
 hosting your agent against the [Microsoft Well-Architected Framework
 for AI workloads — Security pillar][waf-ai]. This is opt-in: the
 findings live in their own `security` category and are skipped unless
 both the `azure_resources` source and the `posture` check are enabled.
+
+Why is this opt-in? The telemetry checks use App Insights and Foundry
+metadata that you already configured in the previous step. Security
+posture requires management-plane reads against the Azure resource group,
+so the tutorial asks for the subscription, resource group, and Cognitive
+Services account explicitly instead of guessing them.
 
 The audit runs five high-impact rules against the Cognitive Services /
 Azure OpenAI account:
@@ -86,29 +95,112 @@ Azure OpenAI account:
 | `waf.security.diagnostic_settings` | warning | Diagnostic logs flowing to Log Analytics / storage / event hub |
 | `waf.security.content_filter` | critical | Every model deployment has a RAI policy applied |
 
-Required RBAC: **Reader** on the resource group (or on each
-individual resource), granted to whoever runs `agentops agent analyze`
-(your local identity locally, or the OIDC-federated identity in CI).
+Required RBAC: **Reader** on the resource group (or on each individual
+resource), granted to whoever runs `agentops agent analyze` (your local
+identity locally, or the OIDC-federated identity in CI).
+
+Find the account to audit:
+
+```powershell
+$env:AZURE_SUBSCRIPTION_ID = az account show --query id -o tsv
+$resourceGroup = "<your-agent-resource-group>"
+
+az cognitiveservices account list `
+  --resource-group $resourceGroup `
+  --query "[].{name:name,kind:kind,location:location,disableLocalAuth:properties.disableLocalAuth,publicNetworkAccess:properties.publicNetworkAccess}" `
+  -o table
+```
+
+Pick the account that hosts your Azure OpenAI / AI Services deployment:
+
+```powershell
+$cognitiveAccount = "<ai-services-or-azure-openai-account-name>"
+```
 
 Enable in `.agentops/agent.yaml`:
 
-```yaml
+```powershell
+@"
+version: 1
+lookback_days: 7
+
 sources:
+  results_history:
+    enabled: true
+    path: .agentops/results
+    lookback_runs: 10
+  azure_monitor:
+    enabled: true
+    app_insights_resource_id: $appInsightsId
+  foundry_control:
+    enabled: true
+    project_endpoint_env: AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
   azure_resources:
     enabled: true
-    subscription_id_env: AZURE_SUBSCRIPTION_ID  # or set subscription_id directly
-    resource_group: rg-myproject
-    cognitive_services_account: ai-services-myproject
+    subscription_id_env: AZURE_SUBSCRIPTION_ID
+    resource_group: $resourceGroup
+    cognitive_services_account: $cognitiveAccount
 
 checks:
+  latency:
+    p95_threshold_seconds: 10.0
+  errors:
+    rate_threshold: 0.05
   posture:
     enabled: true
     pillar: security
-    # Skip individual rules without disabling the whole check, e.g.
-    # exclude_rules:
-    #   - waf.security.diagnostic_settings
     exclude_rules: []
+"@ | Set-Content .agentops/agent.yaml -Encoding utf8
 ```
+
+Run only the security category first:
+
+```powershell
+agentops agent analyze --categories security --severity-fail critical
+code .agentops/agent/report.md
+```
+
+In the test run for this tutorial, `azure_resources` changed from
+`disabled` to `ok` and the report produced two WAF-AI findings:
+
+```text
+## Verdict: ⚠️ Warnings found
+
+| Category | Count |
+|---|---|
+| Security posture (WAF-AI — Security pillar) | 2 |
+
+| Source | Status | Detail |
+|---|---|---|
+| azure_resources | ok |
+
+| Severity | ID | Title | Source |
+|---|---|---|---|
+| warning | waf.security.diagnostic_settings | Diagnostic settings are missing or incomplete | azure_resources |
+| warning | waf.security.public_network_access | Public network access is open and unrestricted | azure_resources |
+```
+
+The evidence blocks in that run showed:
+
+```json
+{
+  "account": "aif-agentops-exp",
+  "diagnostic_settings": []
+}
+```
+
+```json
+{
+  "account": "aif-agentops-exp",
+  "public_network_access": "Enabled",
+  "private_endpoint_count": 0,
+  "network_acls_default_action": "Allow"
+}
+```
+
+Those are real management-plane findings: the account had Entra-only
+authentication enabled, but it still needed diagnostic settings and a
+network restriction plan.
 
 Run only the security category, or skip a specific rule from the CLI:
 
@@ -127,12 +219,12 @@ agentops agent analyze --exclude-rules waf.security.diagnostic_settings,waf.secu
 ```
 
 The Markdown report groups findings by category, so security findings
-appear under their own `### 🔐 Security` heading with a footer link
-back to the WAF-AI guidance.
+appear under their own `### Security posture (WAF-AI — Security pillar)`
+heading with a footer link back to the WAF-AI guidance.
 
 [waf-ai]: https://learn.microsoft.com/azure/well-architected/ai/security
 
-## 3. CI scheduled run
+## 4. CI scheduled run
 
 Pair the analyzer with a GitHub Actions schedule:
 
@@ -161,7 +253,7 @@ jobs:
           path: .agentops/agent/report.md
 ```
 
-## 4. Copilot Chat extension (local)
+## 5. Copilot Chat extension (local)
 
 ```bash
 pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@develop"
@@ -173,7 +265,7 @@ Then point a GitHub App's Copilot Extension webhook at
 local-only** — never expose that endpoint publicly without signature
 validation.
 
-## 5. Hosted Copilot Extension on Azure Container Apps
+## 6. Hosted Copilot Extension on Azure Container Apps
 
 The repo ships a minimal scaffold:
 
