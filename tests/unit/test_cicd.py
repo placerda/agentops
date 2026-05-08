@@ -120,6 +120,21 @@ def test_all_templates_are_valid_yaml(tmp_path: Path) -> None:
         assert "\non:" in text
 
 
+def test_all_templates_pass_foundry_and_evaluator_environment(tmp_path: Path) -> None:
+    generate_cicd_workflows(directory=tmp_path)
+    expected_env = (
+        "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: "
+        "${{ vars.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}",
+        "AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}",
+        "AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT }}",
+    )
+    for rel in ALL_PATHS:
+        content = (tmp_path / rel).read_text(encoding="utf-8")
+
+        for env_line in expected_env:
+            assert env_line in content
+
+
 def test_pr_template_triggers_and_no_environment(tmp_path: Path) -> None:
     generate_cicd_workflows(directory=tmp_path, kinds=["pr"])
     content = (tmp_path / _PR_PATH).read_text(encoding="utf-8")

@@ -395,6 +395,11 @@ loop you will wire into CI next.**
 > *shape* of the delta: tool/task metrics down, text-quality metrics
 > flat.
 
+Before wiring the workflow gate, switch `agentops.yaml` back to the
+tool-using version (`support-bot:1` in the example above) if you want
+the PR check to pass. Leave it on the degraded version only when you
+intentionally want to demonstrate a red quality gate.
+
 ## 7. Generate the GitFlow workflows
 
 ```powershell
