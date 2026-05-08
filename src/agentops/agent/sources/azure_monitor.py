@@ -28,7 +28,7 @@ class AzureMonitorPayload:
 
 
 _REQUESTS_KQL = """
-requests
+union isfuzzy=true requests, dependencies
 | where timestamp > ago({lookback_days}d)
 | summarize
     request_count = count(),

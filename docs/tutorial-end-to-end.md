@@ -661,45 +661,149 @@ the dev environment, and deploys if it passes.
 
 ## 9. Run the Watchdog
 
-The watchdog reads your accumulated run history and (optionally)
-queries Application Insights and the Foundry control plane to flag
-drifts that a single eval cannot see — repeated regressions, latency
-trends, error spikes, safety findings.
+The watchdog is only useful if it has real signals to inspect. In this
+tutorial those signals are:
+
+1. `.agentops/results/*/results.json` from the evals you already ran.
+2. Application Insights telemetry emitted by a new eval run.
+3. Foundry control-plane metadata for the hosted support agent.
+
+If you run `agentops agent analyze` without Application Insights
+configured, the report can only say `azure_monitor: skipped`. That is not
+an observability tutorial. The next commands create Application Insights,
+send telemetry into it, and then run the watchdog against the live data.
+
+### 9.1 Create Application Insights for the tutorial
 
 ```powershell
-pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@develop"
-agentops agent analyze
+# Reuse the same resource group/location as the Foundry account.
+$foundryName = (($env:AZURE_AI_FOUNDRY_PROJECT_ENDPOINT -split "//")[1] -split "\.")[0]
+$foundry = az resource list `
+  --name $foundryName `
+  --resource-type "Microsoft.CognitiveServices/accounts" `
+  --query "[0]" | ConvertFrom-Json
+
+if (-not $foundry) { throw "Could not resolve Foundry resource '$foundryName'" }
+
+$resourceGroup = ($foundry.id -split "/resourceGroups/")[1].Split("/")[0]
+$location      = $foundry.location
+$workspaceName = "law-support-bot-$suffix"
+$appiName      = "appi-support-bot-$suffix"
+
+az extension add -n application-insights --upgrade | Out-Null
+az monitor log-analytics workspace create `
+  --resource-group $resourceGroup `
+  --workspace-name $workspaceName `
+  --location $location | Out-Null
+
+$workspaceId = az monitor log-analytics workspace show `
+  --resource-group $resourceGroup `
+  --workspace-name $workspaceName `
+  --query id -o tsv
+
+az monitor app-insights component create `
+  --app $appiName `
+  --location $location `
+  --resource-group $resourceGroup `
+  --workspace $workspaceId `
+  --application-type web | Out-Null
+
+$appInsightsId = az monitor app-insights component show `
+  --app $appiName `
+  --resource-group $resourceGroup `
+  --query id -o tsv
+
+$appInsightsConnectionString = az monitor app-insights component show `
+  --app $appiName `
+  --resource-group $resourceGroup `
+  --query connectionString -o tsv
 ```
 
-This produces `.agentops/agent/report.md`. With no `agent.yaml`
-present, only the local results-history source is active and Azure
-Monitor / Foundry control plane appear as `skipped` in the
-diagnostics block. That is enough for the basic regression and
-latency checks across all your previous runs.
+What this creates:
 
-To pull production telemetry, drop a starter `agent.yaml` into the
-workspace and edit it:
+- A **Log Analytics workspace** that stores the telemetry tables.
+- A workspace-based **Application Insights component** that receives
+  AgentOps spans and exposes them to Azure Monitor queries.
+- Two local variables:
+  - `$appInsightsId` — used by the watchdog to query telemetry.
+  - `$appInsightsConnectionString` — used by `agentops eval run` to emit
+    telemetry.
+
+### 9.2 Let the CI identity read telemetry
+
+Locally, your signed-in Azure user can usually query the resource because
+you created it. For GitHub Actions, grant the same OIDC app a read role
+so scheduled watchdog runs can query Application Insights too:
 
 ```powershell
-$tpl = python -c "import agentops, pathlib; print(pathlib.Path(agentops.__file__).parent / 'templates' / 'agent.yaml')"
-Copy-Item $tpl .agentops/agent.yaml
+$repo = gh repo view --json nameWithOwner -q .nameWithOwner
+$client = gh variable get AZURE_CLIENT_ID --env dev --repo $repo
+$spId = az ad sp show --id $client --query id -o tsv
+
+az role assignment create `
+  --assignee-object-id $spId `
+  --assignee-principal-type ServicePrincipal `
+  --role "Monitoring Reader" `
+  --scope $appInsightsId | Out-Null
 ```
 
-```yaml
+### 9.3 Configure the watchdog
+
+Now write `.agentops/agent.yaml`. This is the file that tells the
+watchdog which signal sources to use:
+
+```powershell
+@"
+version: 1
+lookback_days: 7
+
 sources:
   results_history:
     enabled: true
+    path: .agentops/results
+    lookback_runs: 10
   azure_monitor:
     enabled: true
-    app_insights_resource_id: /subscriptions/<sub>/resourceGroups/<rg>/providers/microsoft.insights/components/<ai>
+    app_insights_resource_id: $appInsightsId
   foundry_control:
     enabled: true
     project_endpoint_env: AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
+checks:
+  latency:
+    p95_threshold_seconds: 5.0
+  errors:
+    rate_threshold: 0.05
+"@ | Set-Content .agentops/agent.yaml -Encoding utf8
 ```
 
-Re-run `agentops agent analyze`. The findings table now mixes signals
-from your eval history (including the v1 → v2 tool-call regression)
-with live telemetry from the deployed agent.
+### 9.4 Generate telemetry, then analyze it
+
+Install both the Foundry runtime and the watchdog extras, set the
+Application Insights connection string, and run one more eval. AgentOps
+will emit OpenTelemetry spans for each dataset row and agent invocation.
+
+```powershell
+python -m pip install "agentops-toolkit[foundry,agent] @ git+https://github.com/Azure/agentops.git@develop"
+
+$env:APPLICATIONINSIGHTS_CONNECTION_STRING = $appInsightsConnectionString
+agentops eval run
+
+# Azure Monitor ingestion is asynchronous. Give it a short moment to index.
+Start-Sleep -Seconds 90
+
+agentops agent analyze
+code .agentops/agent/report.md
+```
+
+The report should now show `azure_monitor` as `ok`, not `skipped`. The
+watchdog can combine:
+
+- eval-history regressions from `.agentops/results`;
+- live p95 latency and error-rate signals from Application Insights;
+- Foundry control-plane metadata from `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`.
+
+If the findings table is empty, that means the configured checks passed;
+the **Sources** table still proves which signal sources were queried.
 
 > **Optional — WAF-AI security audit.** The watchdog can also run a
 > read-only audit of your Foundry resource group against the
