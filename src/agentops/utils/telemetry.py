@@ -1,8 +1,9 @@
 """Optional OpenTelemetry instrumentation for AgentOps evaluation runs.
 
 All OpenTelemetry imports are **lazy** — they only happen when tracing is
-enabled via the ``AGENTOPS_OTLP_ENDPOINT`` environment variable.  When the
-variable is unset, every public function in this module is a no-op.
+enabled via ``APPLICATIONINSIGHTS_CONNECTION_STRING`` (Azure Monitor) or
+the ``AGENTOPS_OTLP_ENDPOINT`` environment variable. When neither variable
+is set, every public function in this module is a no-op.
 
 Schema design follows three OTel semantic convention layers:
 https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/
@@ -26,12 +27,12 @@ _tracing_enabled: bool = False
 
 
 def is_enabled() -> bool:
-    """Return True when OTLP tracing has been initialised."""
+    """Return True when tracing has been initialised."""
     return _tracing_enabled
 
 
 def init_tracing() -> None:
-    """Initialise the OTLP exporter if ``AGENTOPS_OTLP_ENDPOINT`` is set.
+    """Initialise tracing when Azure Monitor or OTLP export is configured.
 
     Safe to call multiple times; only the first call has an effect.
     """
@@ -40,12 +41,37 @@ def init_tracing() -> None:
     if _tracing_enabled:
         return
 
-    endpoint = os.getenv("AGENTOPS_OTLP_ENDPOINT")
-    if not endpoint:
+    appinsights_connection_string = os.getenv(
+        "APPLICATIONINSIGHTS_CONNECTION_STRING"
+    ) or os.getenv("AGENTOPS_APPLICATIONINSIGHTS_CONNECTION_STRING")
+    otlp_endpoint = os.getenv("AGENTOPS_OTLP_ENDPOINT")
+    if not appinsights_connection_string and not otlp_endpoint:
         return
 
     try:
         from opentelemetry import trace
+    except ImportError:
+        # opentelemetry not installed — tracing stays disabled
+        return
+
+    if appinsights_connection_string:
+        try:
+            from azure.monitor.opentelemetry import configure_azure_monitor
+
+            configure_azure_monitor(
+                connection_string=appinsights_connection_string,
+            )
+            _tracer = trace.get_tracer("agentops")
+            _tracing_enabled = True
+            return
+        except ImportError:
+            # Azure Monitor exporter not installed — try OTLP below if configured.
+            pass
+
+    if not otlp_endpoint:
+        return
+
+    try:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter,
         )
@@ -63,14 +89,14 @@ def init_tracing() -> None:
         )
 
         provider = TracerProvider(resource=resource)
-        exporter = OTLPSpanExporter(endpoint=endpoint + "/v1/traces")
+        exporter = OTLPSpanExporter(endpoint=otlp_endpoint + "/v1/traces")
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
 
         _tracer = trace.get_tracer("agentops")
         _tracing_enabled = True
     except ImportError:
-        # opentelemetry not installed — tracing stays disabled
+        # OTLP exporter not installed — tracing stays disabled
         pass
 
 
@@ -172,7 +198,7 @@ def eval_item_span(
         yield None
         return
 
-    from opentelemetry.trace import SpanKind
+    from opentelemetry.trace import SpanKind, StatusCode
 
     _label = f"eval_item {row_index}"
     if input_text:
@@ -183,7 +209,7 @@ def eval_item_span(
 
     with _tracer.start_as_current_span(
         _label,
-        kind=SpanKind.INTERNAL,
+        kind=SpanKind.SERVER,
     ) as span:
         # CICD task attributes
         span.set_attribute("cicd.pipeline.task.name", "eval_item")
@@ -196,17 +222,27 @@ def eval_item_span(
         if expected_text:
             span.set_attribute("agentops.eval.item.expected", expected_text)
 
-        yield span
+        try:
+            yield span
+        except Exception as exc:
+            span.set_attribute("cicd.pipeline.task.run.result", "failure")
+            span.set_attribute("agentops.eval.item.passed", False)
+            span.set_status(StatusCode.ERROR, str(exc))
+            span.record_exception(exc)
+            raise
 
 
 def set_eval_item_result(span: Any, *, passed: bool) -> None:
     """Set final result on an eval item span."""
     if span is None:
         return
+    from opentelemetry.trace import StatusCode
+
     span.set_attribute(
         "cicd.pipeline.task.run.result", "success" if passed else "failure"
     )
     span.set_attribute("agentops.eval.item.passed", passed)
+    span.set_status(StatusCode.OK if passed else StatusCode.ERROR)
 
 
 @contextmanager

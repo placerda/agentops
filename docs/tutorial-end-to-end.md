@@ -84,7 +84,7 @@ Set the project endpoint up front so every command picks it up.
 
 ```powershell
 $env:AZURE_AI_FOUNDRY_PROJECT_ENDPOINT = "https://<your-project>.services.ai.azure.com/api/projects/<project-name>"
-$env:AZURE_OPENAI_ENDPOINT             = "https://<your-project>.services.ai.azure.com"
+$env:AZURE_OPENAI_ENDPOINT             = "https://<your-project>.openai.azure.com"
 $env:AZURE_OPENAI_DEPLOYMENT           = "gpt-4o-mini"
 ```
 
@@ -92,20 +92,19 @@ $env:AZURE_OPENAI_DEPLOYMENT           = "gpt-4o-mini"
 
 ```bash
 export AZURE_AI_FOUNDRY_PROJECT_ENDPOINT="https://<your-project>.services.ai.azure.com/api/projects/<project-name>"
-export AZURE_OPENAI_ENDPOINT="https://<your-project>.services.ai.azure.com"
+export AZURE_OPENAI_ENDPOINT="https://<your-project>.openai.azure.com"
 export AZURE_OPENAI_DEPLOYMENT="gpt-4o-mini"
 ```
 
-> **Watch out for two endpoint shapes.** On a Foundry "AI Services"
-> account, both env vars start with the same hostname but the
-> project endpoint includes `/api/projects/<project-name>` while
-> `AZURE_OPENAI_ENDPOINT` is **only** the hostname (no path). If you
-> paste the project URL into `AZURE_OPENAI_ENDPOINT` the evaluators
-> fail with `BadRequest: API version not supported`. AgentOps
-> defaults the API version to a release that works against both
-> New Foundry and classic Azure OpenAI; override with
-> `AZURE_OPENAI_API_VERSION` only if your resource needs a specific
-> version.
+> **Watch out for two endpoint shapes.** The Foundry project endpoint
+> uses the `*.services.ai.azure.com/api/projects/<project-name>` shape.
+> The evaluator model endpoint is the Azure OpenAI data-plane host,
+> usually `*.openai.azure.com`, with **no path**. If you paste the
+> project URL into `AZURE_OPENAI_ENDPOINT`, evaluators can fail with
+> `BadRequest: API version not supported`. AgentOps defaults the API
+> version to a release that works against both New Foundry and classic
+> Azure OpenAI; override with `AZURE_OPENAI_API_VERSION` only if your
+> resource needs a specific version.
 
 > The remaining shell snippets in this tutorial are written for
 > **PowerShell** (the default on Windows). bash / zsh users can
@@ -204,8 +203,8 @@ You get:
     └── agentops-*/SKILL.md
 ```
 
-Open `.agentops/agentops.yaml` and configure it for the support
-agent:
+Open `agentops.yaml` at the project root and configure it for the
+support agent:
 
 ```yaml
 version: 1
@@ -223,8 +222,9 @@ thresholds:
   coherence: ">=3"
   fluency: ">=3"
   similarity: ">=3"
-  # Latency budget.
-  avg_latency_seconds: "<=10"
+  # Lab-safe latency budget. Tool-calling Foundry agents can have
+  # occasional cold-start / orchestration spikes during a tutorial run.
+  avg_latency_seconds: "<=90"
 ```
 
 The `agent: "name:version"` shape is recognised as a **Foundry hosted
@@ -275,6 +275,13 @@ quality stack. When AgentOps loads the dataset it picks:
 | `CoherenceEvaluator` / `FluencyEvaluator` / `SimilarityEvaluator` / `F1ScoreEvaluator` | Standard text quality. |
 | `avg_latency_seconds` | End-to-end latency budget. |
 
+> **Why is the latency budget 90 seconds?** The point of this first gate
+> is to prove tool behavior, not to fail a learner because one Foundry
+> row hit a transient cold-start or service-queue spike. Keep this
+> tutorial gate broad, then tighten latency for your own production
+> agent after you have baseline data. Step 9 shows how to use
+> Application Insights and Watchdog for stricter p95 latency monitoring.
+
 ## 5. Run your first evaluation
 
 ```powershell
@@ -308,8 +315,10 @@ The report has four sections you will revisit often:
   debugging false-positive tool calls.
 - **Aggregate metrics** — averages across rows.
 - **Thresholds** — every rule from `agentops.yaml` with measured
-  value. With v1 you should see all the tool-calling thresholds in
-  the green.
+  value. With v1 you should see the tool-calling and text-quality
+  thresholds in the green. If latency is high but below the lab-safe
+  budget, keep going; you will inspect production-style p95 latency
+  with Watchdog later.
 
 The exit code is `0` (all thresholds passed) or `2` (one or more
 failed). `1` means a runtime error.
@@ -441,15 +450,45 @@ git push -u origin develop
 
 ### Wire the GitHub Environments
 
+At this point the eval works on your machine because your local Azure
+login has access to Foundry and to the evaluator model. GitHub Actions is
+a different machine, so you must give the workflow its own identity and
+permissions.
+
 The three workflows (`pr`, `deploy-dev`, `deploy-qa`, `deploy-prod`)
-expect a GitHub **environment** per stage, each populated with the same
-six variables and a federated credential so Azure trusts GitHub OIDC.
+expect one GitHub **environment** per stage. Each environment stores the
+variables the workflow needs and maps to one trusted Azure identity.
+
+| Piece | Why you need it |
+|---|---|
+| App registration + service principal | The Azure identity that GitHub Actions will impersonate. |
+| GitHub environment variables | Non-secret configuration such as tenant, subscription, Foundry endpoint, and evaluator model endpoint. |
+| Federated credential | The trust rule that allows GitHub OIDC tokens from this repo/environment to become Azure tokens. |
+| Azure role assignments | The actual permissions to read the Foundry agent and call the Azure OpenAI judge model. |
+
+Think of the setup in two layers:
+
+1. **Authentication:** GitHub proves "this workflow is running from your
+   `support-bot-*` repo in the `dev`, `qa`, or `prod` environment".
+2. **Authorization:** Azure checks whether that identity has roles on the
+   Foundry and Azure OpenAI resources.
 
 The next four snippets create everything end-to-end. Run them in order
 from the same PowerShell session you used above (so `$suffix` is still
 in scope).
 
 #### 1. Create the app registration GitHub will impersonate
+
+This creates the Azure identity used by the workflows. There is no client
+secret in this tutorial: GitHub will authenticate with OIDC instead of a
+stored password.
+
+The command prints three values you will store as GitHub environment
+variables:
+
+- `AZURE_CLIENT_ID` — which app registration GitHub should impersonate.
+- `AZURE_TENANT_ID` — which Microsoft Entra tenant owns the app.
+- `AZURE_SUBSCRIPTION_ID` — which Azure subscription the workflow should use.
 
 ```powershell
 $app    = az ad app create --display-name "support-bot-ci-$suffix" | ConvertFrom-Json
@@ -475,6 +514,23 @@ Write-Host "AZURE_SUBSCRIPTION_ID = $sub"
 
 #### 2. Create the three environments and push the variables
 
+GitHub environments give each stage its own variable scope and its own
+OIDC subject (`environment:dev`, `environment:qa`, `environment:prod`).
+The PR gate intentionally runs in `dev`, so it reuses the same variables
+and identity as the first deployment stage.
+
+This snippet creates the environments and stores the values the generated
+workflows read through `vars.*`:
+
+| Variable | Where it comes from | Used for |
+|---|---|---|
+| `AZURE_TENANT_ID` | `az account show` | Tells `azure/login` which Entra tenant to authenticate against. |
+| `AZURE_SUBSCRIPTION_ID` | `az account show` | Selects the Azure subscription for the workflow. |
+| `AZURE_CLIENT_ID` | The app registration from step 1 | Tells `azure/login` which identity GitHub should impersonate. |
+| `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT` | Your local env var | Tells AgentOps where the hosted support agent lives. |
+| `AZURE_OPENAI_ENDPOINT` | Your local env var | Tells evaluators where the judge model endpoint is. |
+| `AZURE_OPENAI_DEPLOYMENT` | The deployment name, e.g. `gpt-4o-mini` | Tells evaluators which judge model deployment to call. |
+
 ```powershell
 $foundry = $env:AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
 $aoai    = $env:AZURE_OPENAI_ENDPOINT
@@ -495,16 +551,25 @@ foreach ($envName in @("dev","qa","prod")) {
 
 > **Prefer the portal?** Open your repo on github.com → **Settings →
 > Environments → New environment** and create `dev`, `qa`, and `prod`.
-> For each one, click **Add variable** and add the six rows from the
-> table at the top of this section.
+> For each one, click **Add variable** and add the six variables listed
+> above.
 
 #### 3. Add federated credentials so Azure trusts GitHub OIDC
 
-One credential per environment. The PR gate workflow runs **inside the
-`dev` environment** (so it inherits the same `dev` variables and OIDC
-subject) — no separate `pull_request` credential is needed. The JSON is
-written to a temp file because `az` does not parse inline JSON reliably
-under PowerShell:
+The variables above tell GitHub which Azure identity to use, but Azure
+still needs to trust this repository. A federated credential is that trust
+rule.
+
+Each credential says: "Accept tokens issued by GitHub for this exact repo
+and this exact environment." That is why the `subject` values include
+`environment:dev`, `environment:qa`, and `environment:prod`.
+
+The PR gate workflow runs **inside the `dev` environment**, so it inherits
+the same `dev` variables and OIDC subject — no separate `pull_request`
+credential is needed.
+
+The JSON is written to a temp file because `az` does not parse inline JSON
+reliably under PowerShell:
 
 ```powershell
 $subjects = @{
@@ -537,6 +602,19 @@ foreach ($name in $subjects.Keys) {
 > `environment:prod`).
 
 #### 4. Grant the app the roles it needs
+
+OIDC only proves the workflow's identity; it does not grant access by
+itself. This step assigns least-privilege Azure roles to the service
+principal:
+
+| Scope | Role | Why |
+|---|---|---|
+| Foundry account/project resource | `Azure AI User` | Lets AgentOps read and invoke the hosted support agent. |
+| Azure OpenAI account | `Cognitive Services OpenAI User` | Lets the evaluators call the judge model deployment. |
+
+The endpoint URLs contain the Azure resource names, but role assignments
+need full Azure resource IDs. The first half of the script extracts those
+names and resolves them to IDs; the second half assigns the roles.
 
 ```powershell
 $spId = az ad sp show --id $client --query id -o tsv
@@ -586,51 +664,158 @@ The `agentops-pr.yml` workflow runs. When it finishes you will see:
 - A green or red check on the PR.
 - A bot comment with the verdict, threshold table (including the
   tool-call metrics), and a link to the full `report.md` artifact.
+  The tutorial's latency threshold is intentionally broad; after a few
+  real runs, tighten it in `agentops.yaml` or enforce p95 latency with
+  Watchdog in step 9.
 
 Merge the PR. `agentops-deploy-dev.yml` triggers, runs an eval against
 the dev environment, and deploys if it passes.
 
 ## 9. Run the Watchdog
 
-The watchdog reads your accumulated run history and (optionally)
-queries Application Insights and the Foundry control plane to flag
-drifts that a single eval cannot see — repeated regressions, latency
-trends, error spikes, safety findings.
+The watchdog is only useful if it has real signals to inspect. In this
+tutorial those signals are:
+
+1. `.agentops/results/*/results.json` from the evals you already ran.
+2. Application Insights telemetry emitted by a new eval run.
+3. Foundry control-plane metadata for the hosted support agent.
+
+If you run `agentops agent analyze` without Application Insights
+configured, the report can only say `azure_monitor: skipped`. That is not
+an observability tutorial. The next commands create Application Insights,
+send telemetry into it, and then run the watchdog against the live data.
+
+### 9.1 Create Application Insights for the tutorial
 
 ```powershell
-pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@develop"
-agentops agent analyze
+# Reuse the same resource group/location as the Foundry account.
+$foundryName = (($env:AZURE_AI_FOUNDRY_PROJECT_ENDPOINT -split "//")[1] -split "\.")[0]
+$foundry = az resource list `
+  --name $foundryName `
+  --resource-type "Microsoft.CognitiveServices/accounts" `
+  --query "[0]" | ConvertFrom-Json
+
+if (-not $foundry) { throw "Could not resolve Foundry resource '$foundryName'" }
+
+$resourceGroup = ($foundry.id -split "/resourceGroups/")[1].Split("/")[0]
+$location      = $foundry.location
+$workspaceName = "law-support-bot-$suffix"
+$appiName      = "appi-support-bot-$suffix"
+
+az extension add -n application-insights --upgrade | Out-Null
+az monitor log-analytics workspace create `
+  --resource-group $resourceGroup `
+  --workspace-name $workspaceName `
+  --location $location | Out-Null
+
+$workspaceId = az monitor log-analytics workspace show `
+  --resource-group $resourceGroup `
+  --workspace-name $workspaceName `
+  --query id -o tsv
+
+az monitor app-insights component create `
+  --app $appiName `
+  --location $location `
+  --resource-group $resourceGroup `
+  --workspace $workspaceId `
+  --application-type web | Out-Null
+
+$appInsightsId = az monitor app-insights component show `
+  --app $appiName `
+  --resource-group $resourceGroup `
+  --query id -o tsv
+
+$appInsightsConnectionString = az monitor app-insights component show `
+  --app $appiName `
+  --resource-group $resourceGroup `
+  --query connectionString -o tsv
 ```
 
-This produces `.agentops/agent/report.md`. With no `agent.yaml`
-present, only the local results-history source is active and Azure
-Monitor / Foundry control plane appear as `skipped` in the
-diagnostics block. That is enough for the basic regression and
-latency checks across all your previous runs.
+What this creates:
 
-To pull production telemetry, drop a starter `agent.yaml` into the
-workspace and edit it:
+- A **Log Analytics workspace** that stores the telemetry tables.
+- A workspace-based **Application Insights component** that receives
+  AgentOps spans and exposes them to Azure Monitor queries.
+- Two local variables:
+  - `$appInsightsId` — used by the watchdog to query telemetry.
+  - `$appInsightsConnectionString` — used by `agentops eval run` to emit
+    telemetry.
+
+### 9.2 Let the CI identity read telemetry
+
+Locally, your signed-in Azure user can usually query the resource because
+you created it. For GitHub Actions, grant the same OIDC app a read role
+so scheduled watchdog runs can query Application Insights too:
 
 ```powershell
-$tpl = python -c "import agentops, pathlib; print(pathlib.Path(agentops.__file__).parent / 'templates' / 'agent.yaml')"
-Copy-Item $tpl .agentops/agent.yaml
+$repo = gh repo view --json nameWithOwner -q .nameWithOwner
+$client = gh variable get AZURE_CLIENT_ID --env dev --repo $repo
+$spId = az ad sp show --id $client --query id -o tsv
+
+az role assignment create `
+  --assignee-object-id $spId `
+  --assignee-principal-type ServicePrincipal `
+  --role "Monitoring Reader" `
+  --scope $appInsightsId | Out-Null
 ```
 
-```yaml
+### 9.3 Configure the watchdog
+
+Now write `.agentops/agent.yaml`. This is the file that tells the
+watchdog which signal sources to use:
+
+```powershell
+@"
+version: 1
+lookback_days: 7
+
 sources:
   results_history:
     enabled: true
+    path: .agentops/results
+    lookback_runs: 10
   azure_monitor:
     enabled: true
-    app_insights_resource_id: /subscriptions/<sub>/resourceGroups/<rg>/providers/microsoft.insights/components/<ai>
+    app_insights_resource_id: $appInsightsId
   foundry_control:
     enabled: true
     project_endpoint_env: AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
+checks:
+  latency:
+    p95_threshold_seconds: 5.0
+  errors:
+    rate_threshold: 0.05
+"@ | Set-Content .agentops/agent.yaml -Encoding utf8
 ```
 
-Re-run `agentops agent analyze`. The findings table now mixes signals
-from your eval history (including the v1 → v2 tool-call regression)
-with live telemetry from the deployed agent.
+### 9.4 Generate telemetry, then analyze it
+
+Install both the Foundry runtime and the watchdog extras, set the
+Application Insights connection string, and run one more eval. AgentOps
+will emit OpenTelemetry spans for each dataset row and agent invocation.
+
+```powershell
+python -m pip install "agentops-toolkit[foundry,agent] @ git+https://github.com/Azure/agentops.git@develop"
+
+$env:APPLICATIONINSIGHTS_CONNECTION_STRING = $appInsightsConnectionString
+agentops eval run
+
+# Azure Monitor ingestion is asynchronous. Give it a short moment to index.
+Start-Sleep -Seconds 90
+
+agentops agent analyze
+code .agentops/agent/report.md
+```
+
+The report should now show `azure_monitor` as `ok`, not `skipped`. The
+watchdog can combine:
+
+- eval-history regressions from `.agentops/results`;
+- live p95 latency and error-rate signals from Application Insights;
+- Foundry control-plane metadata from `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`.
+
+If the findings table is empty, that means the configured checks passed;
+the **Sources** table still proves which signal sources were queried.
 
 > **Optional — WAF-AI security audit.** The watchdog can also run a
 > read-only audit of your Foundry resource group against the

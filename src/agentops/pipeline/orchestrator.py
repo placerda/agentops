@@ -34,6 +34,7 @@ from agentops.core.results import (
 )
 from agentops.pipeline import comparison as comparison_module
 from agentops.pipeline import invocations, publisher, reporter, runtime, thresholds
+from agentops.utils import telemetry
 from agentops.utils.colors import style
 
 logger = logging.getLogger("agentops.pipeline")
@@ -65,6 +66,19 @@ def run_evaluation(
     options: RunOptions,
 ) -> RunResult:
     """Run a full evaluation and persist artifacts. Returns the RunResult."""
+    telemetry.init_tracing()
+    try:
+        return _run_evaluation(config, options=options)
+    finally:
+        telemetry.shutdown()
+
+
+def _run_evaluation(
+    config: AgentOpsConfig,
+    *,
+    options: RunOptions,
+) -> RunResult:
+    """Run a full evaluation after optional telemetry has been initialized."""
     started_at = datetime.now(timezone.utc)
     started_perf = time.perf_counter()
 
@@ -106,26 +120,40 @@ def run_evaluation(
         f"{_friendly_target_kind(target.kind)}: {style(target.raw, 'bold')}."
     )
 
-    rows: List[RowResult] = []
-    rules_by_metric = {rule.metric: rule for rule in threshold_rules}
-    for index, row in enumerate(dataset_rows):
-        rows.append(
-            _evaluate_row(
-                row=row,
-                index=index,
-                total=total,
-                target=target,
-                config=config,
-                evaluators=evaluator_runtimes,
-                timeout=options.timeout_seconds,
-                progress=progress,
-                rules_by_metric=rules_by_metric,
+    with telemetry.eval_run_span(
+        bundle_name=options.config_path.stem,
+        dataset_name=dataset_path.name,
+        backend_type=target.kind,
+        target=target.raw,
+        model=target.deployment,
+        agent_id=target.raw if target.kind.startswith("foundry") else None,
+    ) as run_span:
+        rows: List[RowResult] = []
+        rules_by_metric = {rule.metric: rule for rule in threshold_rules}
+        for index, row in enumerate(dataset_rows):
+            rows.append(
+                _evaluate_row(
+                    row=row,
+                    index=index,
+                    total=total,
+                    target=target,
+                    config=config,
+                    evaluators=evaluator_runtimes,
+                    timeout=options.timeout_seconds,
+                    progress=progress,
+                    rules_by_metric=rules_by_metric,
+                )
             )
-        )
 
-    aggregate = _aggregate_metrics(rows)
-    threshold_results = thresholds.evaluate(threshold_rules, aggregate)
-    summary = _summarize(rows, threshold_results)
+        aggregate = _aggregate_metrics(rows)
+        threshold_results = thresholds.evaluate(threshold_rules, aggregate)
+        summary = _summarize(rows, threshold_results)
+        telemetry.set_eval_run_result(
+            run_span,
+            passed=summary.overall_passed,
+            items_total=summary.items_total,
+            items_passed=summary.items_passed_all,
+        )
 
     finished_at = datetime.now(timezone.utc)
     duration = time.perf_counter() - started_perf
@@ -357,6 +385,24 @@ def _iter_dataset(path: Path) -> Iterable[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _metric_passes(rule: Threshold, value: float) -> bool:
+    if rule.value is None or rule.criteria in {"true", "false"}:
+        return True
+    target_v = float(rule.value)
+    c = rule.criteria
+    if c == ">=":
+        return value >= target_v
+    if c == ">":
+        return value > target_v
+    if c == "<=":
+        return value <= target_v
+    if c == "<":
+        return value < target_v
+    if c == "==":
+        return value == target_v
+    return True
+
+
 def _evaluate_row(
     *,
     row: Dict[str, Any],
@@ -374,56 +420,83 @@ def _evaluate_row(
     if len(preview) > 80:
         preview = preview[:77] + "..."
     progress(f"{label} invoking target: {preview!r}")
+    expected = row.get("expected")
+    expected_text = str(expected) if expected is not None else None
 
-    try:
-        invocation = invocations.invoke(target, config, row, timeout=timeout)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("row %d invocation failed: %s", index, exc)
-        progress(f"{label} {style('invocation FAILED', 'bold', 'red')}: {exc}")
-        return RowResult(
-            row_index=index,
-            input=str(row.get("input", "")),
-            expected=row.get("expected"),
-            response="",
-            context=row.get("context"),
-            error=str(exc),
+    with telemetry.eval_item_span(
+        row_index=index,
+        input_text=str(row.get("input", "")),
+        expected_text=expected_text,
+    ) as item_span:
+        try:
+            with telemetry.agent_invoke_span(
+                target="agent" if target.kind.startswith("foundry") else "model",
+                model=target.deployment,
+                agent_id=target.raw if target.kind.startswith("foundry") else None,
+                agent_name=target.name,
+                agent_version=target.version,
+            ) as invoke_span:
+                invocation = invocations.invoke(target, config, row, timeout=timeout)
+                telemetry.set_agent_invoke_result(
+                    invoke_span,
+                    response_model=target.deployment,
+                )
+        except Exception as exc:  # noqa: BLE001
+            telemetry.set_eval_item_result(item_span, passed=False)
+            logger.warning("row %d invocation failed: %s", index, exc)
+            progress(f"{label} {style('invocation FAILED', 'bold', 'red')}: {exc}")
+            return RowResult(
+                row_index=index,
+                input=str(row.get("input", "")),
+                expected=row.get("expected"),
+                response="",
+                context=row.get("context"),
+                error=str(exc),
+            )
+
+        tool_count = len(invocation.tool_calls) if invocation.tool_calls else 0
+        progress(
+            f"{label} replied in {style(f'{invocation.latency_seconds:.2f}s', 'cyan')} "
+            f"({tool_count} tool call(s)); scoring..."
         )
 
-    tool_count = len(invocation.tool_calls) if invocation.tool_calls else 0
-    progress(
-        f"{label} replied in {style(f'{invocation.latency_seconds:.2f}s', 'cyan')} "
-        f"({tool_count} tool call(s)); scoring..."
-    )
+        metrics: List[RowMetric] = []
+        for evaluator in evaluators:
+            metric = runtime.run_evaluator(
+                evaluator,
+                row=row,
+                response=invocation.response,
+                latency_seconds=invocation.latency_seconds,
+                actual_tool_calls=invocation.tool_calls,
+            )
+            metrics.append(metric)
 
-    metrics: List[RowMetric] = []
-    for evaluator in evaluators:
-        metric = runtime.run_evaluator(
-            evaluator,
-            row=row,
-            response=invocation.response,
-            latency_seconds=invocation.latency_seconds,
-            actual_tool_calls=invocation.tool_calls,
+            rule = (rules_by_metric or {}).get(metric.name)
+            metric_passed = (
+                None
+                if metric.value is None or rule is None
+                else _metric_passes(rule, float(metric.value))
+            )
+            telemetry.record_evaluator_span(
+                evaluator_name=evaluator.preset.name,
+                builtin_name=metric.name,
+                source=(
+                    "local"
+                    if evaluator.preset.class_name == "_latency"
+                    else "azure-ai-evaluation"
+                ),
+                score=float(metric.value) if metric.value is not None else 0.0,
+                threshold=rule.value if rule is not None else None,
+                criteria=rule.criteria if rule is not None else None,
+                passed=metric_passed,
+            )
+
+        telemetry.set_eval_item_result(
+            item_span,
+            passed=all(metric.error is None for metric in metrics),
         )
-        metrics.append(metric)
 
     rules = rules_by_metric or {}
-
-    def _passes(rule: Threshold, value: float) -> bool:
-        if rule.value is None or rule.criteria in {"true", "false"}:
-            return True
-        target_v = float(rule.value)
-        c = rule.criteria
-        if c == ">=":
-            return value >= target_v
-        if c == ">":
-            return value > target_v
-        if c == "<=":
-            return value <= target_v
-        if c == "<":
-            return value < target_v
-        if c == "==":
-            return value == target_v
-        return True
 
     def _format_metric(m: RowMetric) -> str:
         if isinstance(m.value, (int, float)):
@@ -433,7 +506,7 @@ def _evaluate_row(
                 # No user threshold for this metric: keep value neutral
                 # so the line stays readable.
                 return f"{m.name}={text}"
-            color = "green" if _passes(rule, float(m.value)) else "red"
+            color = "green" if _metric_passes(rule, float(m.value)) else "red"
             return f"{m.name}={style(text, color)}"
         if m.error:
             return f"{m.name}={style('ERR', 'red')}"

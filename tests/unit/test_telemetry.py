@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from agentops.agent.config import AzureMonitorSourceConfig
+from agentops.agent.sources import azure_monitor
+from agentops.core.agentops_config import AgentOpsConfig
+from agentops.pipeline.orchestrator import RunOptions, run_evaluation
+from agentops.utils import telemetry
 from agentops.utils.telemetry import (
     eval_item_span,
     eval_run_span,
@@ -265,3 +273,153 @@ class TestSpanAttributesWhenEnabled:
         self.mock_tracer.start_as_current_span.assert_called_once()
         span_name = self.mock_tracer.start_as_current_span.call_args.args[0]
         assert span_name == "RUN my_bundle"
+
+
+def test_application_insights_connection_string_initializes_azure_monitor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, str] = {}
+
+    trace_module = types.ModuleType("opentelemetry.trace")
+    trace_module.get_tracer = lambda name: ("tracer", name)  # type: ignore[attr-defined]
+
+    opentelemetry_module = types.ModuleType("opentelemetry")
+    opentelemetry_module.trace = trace_module  # type: ignore[attr-defined]
+
+    azure_module = types.ModuleType("azure")
+    azure_monitor_module = types.ModuleType("azure.monitor")
+    azure_monitor_otel_module = types.ModuleType("azure.monitor.opentelemetry")
+
+    def configure_azure_monitor(*, connection_string: str) -> None:
+        calls["connection_string"] = connection_string
+
+    setattr(
+        azure_monitor_otel_module,
+        "configure_azure_monitor",
+        configure_azure_monitor,
+    )
+
+    monkeypatch.setitem(sys.modules, "opentelemetry", opentelemetry_module)
+    monkeypatch.setitem(sys.modules, "opentelemetry.trace", trace_module)
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", azure_monitor_module)
+    monkeypatch.setitem(
+        sys.modules, "azure.monitor.opentelemetry", azure_monitor_otel_module
+    )
+    monkeypatch.setattr(telemetry, "_tracer", None)
+    monkeypatch.setattr(telemetry, "_tracing_enabled", False)
+    monkeypatch.setenv(
+        "APPLICATIONINSIGHTS_CONNECTION_STRING",
+        "InstrumentationKey=00000000-0000-0000-0000-000000000000",
+    )
+    monkeypatch.delenv("AGENTOPS_OTLP_ENDPOINT", raising=False)
+
+    init_tracing()
+
+    assert calls == {
+        "connection_string": "InstrumentationKey=00000000-0000-0000-0000-000000000000"
+    }
+    assert is_enabled() is True
+
+
+def test_azure_monitor_queries_requests_and_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str | None] = {}
+
+    azure_module = types.ModuleType("azure")
+    identity_module = types.ModuleType("azure.identity")
+    monitor_module = types.ModuleType("azure.monitor")
+    query_module = types.ModuleType("azure.monitor.query")
+
+    class DefaultAzureCredential:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+    class LogsQueryStatus:
+        FAILURE = "Failure"
+
+    class Column:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    class Table:
+        columns = [
+            Column("request_count"),
+            Column("error_count"),
+            Column("avg_duration_ms"),
+            Column("p95_duration_ms"),
+        ]
+        rows = [[2, 1, 1000.0, 2500.0]]
+
+    class Response:
+        status = "Success"
+        tables = [Table()]
+
+    class LogsQueryClient:
+        def __init__(self, _credential: object) -> None:
+            pass
+
+        def query_resource(
+            self,
+            *,
+            resource_id: str,
+            query: str,
+            timespan: object,
+        ) -> Response:
+            captured["resource_id"] = resource_id
+            captured["query"] = query
+            captured["timespan"] = str(timespan)
+            return Response()
+
+    identity_module.DefaultAzureCredential = DefaultAzureCredential  # type: ignore[attr-defined]
+    query_module.LogsQueryClient = LogsQueryClient  # type: ignore[attr-defined]
+    query_module.LogsQueryStatus = LogsQueryStatus  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.identity", identity_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+
+    payload = azure_monitor.collect_azure_monitor(
+        AzureMonitorSourceConfig(
+            enabled=True,
+            app_insights_resource_id=(
+                "/subscriptions/000/resourceGroups/rg/providers/"
+                "Microsoft.Insights/components/appi"
+            ),
+        ),
+        lookback_days=7,
+    )
+
+    assert "union isfuzzy=true requests, dependencies" in str(captured["query"])
+    assert payload.diagnostics["status"] == "ok"
+    assert payload.request_count == 2
+    assert payload.error_count == 1
+    assert payload.error_rate == 0.5
+    assert payload.avg_duration_seconds == 1.0
+    assert payload.p95_duration_seconds == 2.5
+
+
+def test_run_evaluation_flushes_telemetry_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(telemetry, "init_tracing", lambda: events.append("init"))
+    monkeypatch.setattr(telemetry, "shutdown", lambda: events.append("shutdown"))
+
+    config = AgentOpsConfig(
+        version=1,
+        agent="model:gpt-4o-mini",
+        dataset=tmp_path / "missing.jsonl",
+    )
+    options = RunOptions(
+        config_path=tmp_path / "agentops.yaml",
+        output_dir=tmp_path / "out",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        run_evaluation(config, options=options)
+
+    assert events == ["init", "shutdown"]
