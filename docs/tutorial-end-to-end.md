@@ -762,9 +762,21 @@ az role assignment create `
 ### 9.3 Configure the watchdog
 
 Now write `.agentops/agent.yaml`. This is the file that tells the
-watchdog which signal sources to use:
+watchdog which signal sources to use. In addition to eval history,
+Application Insights, and Foundry metadata, this tutorial enables the
+read-only WAF-AI security posture audit for the Azure AI account:
 
 ```powershell
+$env:AZURE_SUBSCRIPTION_ID = az account show --query id -o tsv
+$cognitiveAccount = az cognitiveservices account list `
+  --resource-group $resourceGroup `
+  --query "[?kind=='AIServices' || kind=='OpenAI'].name | [0]" `
+  -o tsv
+
+if (-not $cognitiveAccount) {
+  throw "No AIServices/OpenAI account found in resource group $resourceGroup"
+}
+
 @"
 version: 1
 lookback_days: 7
@@ -780,12 +792,30 @@ sources:
   foundry_control:
     enabled: true
     project_endpoint_env: AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
+  azure_resources:
+    enabled: true
+    subscription_id_env: AZURE_SUBSCRIPTION_ID
+    resource_group: $resourceGroup
+    cognitive_services_account: $cognitiveAccount
 checks:
   latency:
     p95_threshold_seconds: 5.0
   errors:
     rate_threshold: 0.05
+  posture:
+    enabled: true
+    pillar: security
+    exclude_rules: []
 "@ | Set-Content .agentops/agent.yaml -Encoding utf8
+```
+
+If your resource group or account name is different, list candidates with:
+
+```powershell
+az cognitiveservices account list `
+  --resource-group $resourceGroup `
+  --query "[].{name:name,kind:kind,location:location,disableLocalAuth:properties.disableLocalAuth,publicNetworkAccess:properties.publicNetworkAccess}" `
+  -o table
 ```
 
 ### 9.4 Generate telemetry, then analyze it
@@ -805,26 +835,27 @@ Start-Sleep -Seconds 90
 
 agentops agent analyze
 code .agentops/agent/report.md
+
+# Optional: focus only on WAF-AI security posture.
+agentops agent analyze --categories security --severity-fail critical
 ```
 
-The report should now show `azure_monitor` as `ok`, not `skipped`. The
-watchdog can combine:
+The report should now show `azure_monitor` and `azure_resources` as `ok`,
+not `skipped`. The watchdog can combine:
 
 - eval-history regressions from `.agentops/results`;
 - live p95 latency and error-rate signals from Application Insights;
-- Foundry control-plane metadata from `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`.
+- Foundry control-plane metadata from `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`;
+- WAF-AI security posture findings from the Cognitive Services / Azure
+  OpenAI account.
 
 If the findings table is empty, that means the configured checks passed;
 the **Sources** table still proves which signal sources were queried.
 
-> **Optional — WAF-AI security audit.** The watchdog can also run a
-> read-only audit of your Foundry resource group against the
-> [Well-Architected Framework for AI workloads — Security pillar][waf-ai].
-> Enable the `azure_resources` source and the `posture` check in
-> `agent.yaml` (commented stanzas are included), grant your identity
-> `Reader` on the resource group, and re-run with
-> `agentops agent analyze --categories security`. Full walkthrough:
-> [`tutorial-agent-watchdog.md`](tutorial-agent-watchdog.md#2b-security-posture-audit-waf-ai).
+In the tutorial test environment, the posture-only run produced two
+warnings: missing diagnostic settings and unrestricted public network
+access on the AI Services account. Full walkthrough:
+[`tutorial-agent-watchdog.md`](tutorial-agent-watchdog.md#3-security-posture-audit-waf-ai).
 
 For deeper integration (Copilot Chat extension, ACA deploy), see
 [`tutorial-agent-watchdog.md`](tutorial-agent-watchdog.md).
