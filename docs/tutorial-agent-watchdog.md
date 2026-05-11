@@ -27,7 +27,7 @@ in three form factors:
 ## 1. Local dry-run
 
 ```powershell
-pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@feature/test-tutorials"
+pip install "agentops-toolkit[agent]"
 agentops init                     # if you don't already have .agentops/
 
 # Optional: drop a starter agent.yaml into the workspace.
@@ -60,7 +60,7 @@ Install the agent extras (lazy SDKs only loaded when sources are
 enabled):
 
 ```powershell
-pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@feature/test-tutorials"
+pip install "agentops-toolkit[agent]"
 az login
 agentops agent analyze --severity-fail critical
 ```
@@ -241,7 +241,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - run: pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@feature/test-tutorials"
+      - run: pip install "agentops-toolkit[agent]"
       - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -257,7 +257,7 @@ jobs:
 ## 5. Copilot Chat extension (local)
 
 ```powershell
-pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@feature/test-tutorials"
+pip install "agentops-toolkit[agent]"
 agentops agent serve --no-verify --port 8080
 ```
 

@@ -40,7 +40,7 @@ If you see agent scores drop to 1.0 on questions that the model-direct handles a
 - Azure CLI (`az login`)
 - A Foundry project with a deployed agent
 - A model deployment in the same project (used as the judge model for SimilarityEvaluator)
-- `pip install "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@feature/test-tutorials"`
+- `pip install "agentops-toolkit[foundry]"`
 
 ## Part 1: Create the agent in Foundry
 
@@ -84,7 +84,7 @@ AgentOps handles both. Named agents use the Foundry Responses API; legacy agents
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
-python -m pip install --upgrade "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@feature/test-tutorials"
+python -m pip install --upgrade "agentops-toolkit[foundry]"
 az login
 ```
 

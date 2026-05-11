@@ -48,7 +48,7 @@ Exit code contract:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
-python -m pip install --upgrade "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@feature/test-tutorials"
+python -m pip install --upgrade "agentops-toolkit[foundry]"
 ```
 
 ### 2) Bootstrap
