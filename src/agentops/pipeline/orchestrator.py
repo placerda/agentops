@@ -80,6 +80,13 @@ def _run_evaluation(
     options: RunOptions,
 ) -> RunResult:
     """Run a full evaluation after optional telemetry has been initialized."""
+    if options.baseline_path is not None and not options.baseline_path.exists():
+        raise FileNotFoundError(
+            f"baseline file not found: {options.baseline_path}. "
+            "Run `agentops eval run` once without `--baseline` first, then copy "
+            "`.agentops/results/latest/results.json` to the baseline path."
+        )
+
     started_at = datetime.now(timezone.utc)
     started_perf = time.perf_counter()
 

@@ -122,6 +122,9 @@ $env:AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
 agentops eval run
 ```
 
+> **Important:** run this command **without** `--baseline`. The baseline
+> file does not exist yet — you are creating it in this step.
+
 Use the Azure OpenAI data-plane endpoint for `AZURE_OPENAI_ENDPOINT` (`*.openai.azure.com`, no `/api/projects/...` path), not the Foundry project endpoint.
 
 If Azure returns `Tenant provided in token does not match resource tenant`, sign in with the tenant that owns the Foundry project:
@@ -156,7 +159,8 @@ The seed dataset asks the target to answer with exact short factual
 sentences. The prompt from step 3 is designed to pass this smoke test, so
 this first successful run is your baseline.
 
-Capture that baseline before changing the agent:
+**Capture the baseline now** — the comparison run in step 6 requires
+this file to exist:
 
 ```powershell
 New-Item -ItemType Directory -Force .agentops\baseline | Out-Null
