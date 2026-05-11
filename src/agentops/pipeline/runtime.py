@@ -117,8 +117,9 @@ def load_evaluator(preset: EvaluatorPreset) -> EvaluatorRuntime:
     except ImportError as exc:
         raise RuntimeError(
             "Evaluators require the 'azure-ai-evaluation' package. "
-            "Install the Foundry extra with: "
-            "pip install 'agentops-toolkit[foundry]'"
+            "Install the Foundry extra in this virtual environment. "
+            "For the tutorial branch, run: python -m pip install --upgrade "
+            "'agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@feature/test-tutorials'"
         ) from exc
 
     cls = getattr(module, preset.class_name, None)
