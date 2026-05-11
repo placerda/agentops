@@ -109,12 +109,13 @@ def _get_token(scope: str) -> str:
         return _credential().get_token(scope).token
 
 
-def _project_endpoint_from_env() -> str:
-    endpoint = os.getenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
+def _project_endpoint(config: AgentOpsConfig) -> str:
+    endpoint = config.project_endpoint or os.getenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
     if not endpoint:
         raise RuntimeError(
-            "Missing AZURE_AI_FOUNDRY_PROJECT_ENDPOINT environment variable. "
-            "Foundry targets require a project endpoint URL."
+            "Foundry targets require a project endpoint URL. Set "
+            "'project_endpoint' in agentops.yaml or set the "
+            "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT environment variable."
         )
     return endpoint.rstrip("/")
 
@@ -151,9 +152,13 @@ def _http_request_json(
                 time.sleep(2 ** attempt)
                 last_exc = exc
                 continue
-            raise RuntimeError(
-                f"HTTP {exc.code} from {url}: {detail or exc.reason}"
-            ) from exc
+            message = f"HTTP {exc.code} from {url}: {detail or exc.reason}"
+            if "Tenant provided in token does not match resource tenant" in detail:
+                message += (
+                    " Check that `az login` is using the same tenant as the "
+                    "Foundry project, or run `az login --tenant <tenant-id>`."
+                )
+            raise RuntimeError(message) from exc
         except urllib.error.URLError as exc:
             if attempt < 3:
                 time.sleep(2 ** attempt)
@@ -246,14 +251,14 @@ def _extract_responses_tool_calls(payload: Dict[str, Any]) -> Optional[List[Any]
 
 def _invoke_model_direct(
     target: TargetResolution,
-    config: AgentOpsConfig,  # noqa: ARG001
+    config: AgentOpsConfig,
     row: Dict[str, Any],
     *,
     timeout: float,  # noqa: ARG001
 ) -> InvocationResult:
     from azure.ai.projects import AIProjectClient  # noqa: WPS433
 
-    project_endpoint = _project_endpoint_from_env()
+    project_endpoint = _project_endpoint(config)
     client = AIProjectClient(endpoint=project_endpoint, credential=_credential())
     openai_client = client.get_openai_client()
 
@@ -361,12 +366,12 @@ def _run_responses_tool_loop(
 
 def _invoke_foundry_prompt(
     target: TargetResolution,
-    config: AgentOpsConfig,  # noqa: ARG001
+    config: AgentOpsConfig,
     row: Dict[str, Any],
     *,
     timeout: float,
 ) -> InvocationResult:
-    project_endpoint = _project_endpoint_from_env()
+    project_endpoint = _project_endpoint(config)
     token = _get_token("https://ai.azure.com/.default")
     headers = {
         "Content-Type": "application/json",

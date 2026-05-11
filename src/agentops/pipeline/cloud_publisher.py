@@ -289,25 +289,30 @@ def _upload_dataset(
 def _build_testing_criteria(result: RunResult) -> List[Dict[str, Any]]:
     """Map evaluator class names from ``result`` onto Azure AI evaluators.
 
-    We read the evaluator class names off the aggregate metric keys'
-    presets; since presets are not serialised verbatim into ``RunResult``,
-    we infer them from the aggregate metric *keys* against the catalog at
-    call time.
+    Prefer ``result.evaluators`` because it records the evaluator set selected
+    for the run even when every local invocation failed and no aggregate
+    metrics were produced. Fall back to aggregate metric keys for compatibility
+    with older result payloads.
     """
     # Lazy import to avoid pulling evaluators into modules that don't
     # need them.
     from agentops.core.evaluators import CATALOG
 
     # ``CATALOG`` is keyed by preset.name (== class name); ``aggregate_metrics``
-    # is keyed by preset.score_key. Build a one-shot reverse index.
+    # is keyed by preset.score_key. Build a one-shot reverse index for older
+    # result payloads or synthesized tests that only carry metric keys.
     by_score_key = {p.score_key: p for p in CATALOG.values()}
+    presets = [CATALOG[name] for name in result.evaluators if name in CATALOG]
+    if not presets:
+        presets = [
+            preset
+            for metric_name in result.aggregate_metrics.keys()
+            if (preset := by_score_key.get(metric_name)) is not None
+        ]
 
     criteria: List[Dict[str, Any]] = []
     seen: set = set()
-    for metric_name in result.aggregate_metrics.keys():
-        preset = by_score_key.get(metric_name)
-        if preset is None:
-            continue
+    for preset in presets:
         # Latency is computed locally; Foundry has its own server-side view.
         if "runtime" in preset.categories:
             continue

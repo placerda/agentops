@@ -106,6 +106,19 @@ def test_build_testing_criteria_skips_latency():
     assert "avg_latency_seconds" not in names
 
 
+def test_build_testing_criteria_uses_selected_evaluators_when_metrics_empty():
+    """Cloud publish should still know what to evaluate if local invocation
+    failed before any row metrics were produced."""
+    result = _make_result()
+    result.aggregate_metrics.clear()
+
+    criteria = cloud_publisher._build_testing_criteria(result)
+
+    azure_names = {c["evaluator_name"] for c in criteria}
+    assert "builtin.coherence" in azure_names
+    assert "builtin.fluency" in azure_names
+
+
 def test_build_testing_criteria_warns_on_unknown_evaluator(caplog):
     """Metrics whose preset has no azure_ai_evaluator mapping are logged
     and skipped, never raised — local results.json remains canonical."""
@@ -123,7 +136,8 @@ def test_build_testing_criteria_warns_on_unknown_evaluator(caplog):
         default_threshold=None,
         categories=frozenset({"agent"}),
     )
-    result.aggregate_metrics["my_custom"] = 0.42
+    result.evaluators = ["MyCustomEvaluator"]
+    result.aggregate_metrics.clear()
     with mock.patch.dict(_ev.CATALOG, {"MyCustomEvaluator": fake}):
         with caplog.at_level("WARNING"):
             criteria = cloud_publisher._build_testing_criteria(result)

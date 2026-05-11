@@ -81,11 +81,14 @@ dataset: .agentops/data/smoke.jsonl
 ### 4) Run
 
 ```powershell
+az login
 $env:AZURE_AI_FOUNDRY_PROJECT_ENDPOINT = "https://<resource>.services.ai.azure.com/api/projects/<project>"
 $env:AZURE_OPENAI_ENDPOINT = "https://<openai-resource>.openai.azure.com"
 $env:AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
 agentops eval run
 ```
+
+For Foundry targets, you can put `project_endpoint:` in `agentops.yaml` instead of setting `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`; if both are set, `agentops.yaml` wins for target invocation and publishing.
 
 Outputs land in `.agentops/results/latest/`:
 

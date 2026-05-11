@@ -231,9 +231,9 @@ class AgentOpsConfig(BaseModel):
     project_endpoint: Optional[str] = Field(
         None,
         description=(
-            "Optional Foundry project endpoint URL used by 'publish: foundry' "
-            "or 'publish: foundry_cloud'. "
-            "When omitted, AGENTOPS reads AZURE_AI_FOUNDRY_PROJECT_ENDPOINT."
+            "Optional Foundry project endpoint URL used for Foundry target "
+            "invocation and publishing. When omitted, AgentOps reads "
+            "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT."
         ),
     )
 

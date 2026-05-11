@@ -80,7 +80,7 @@ publish: foundry_cloud
 
 ## 4. Run the evaluation
 
-Set credentials and run. These environment variables are required even if you also put `project_endpoint:` in `agentops.yaml`, because the local invocation and evaluator runtime read them from the process environment.
+Set credentials and run. For Foundry targets, provide the project endpoint either in `agentops.yaml` as `project_endpoint:` or in `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`; if both are set, `agentops.yaml` wins for target invocation and publishing.
 
 ```powershell
 az login
@@ -91,6 +91,12 @@ agentops eval run
 ```
 
 Use the Azure OpenAI data-plane endpoint for `AZURE_OPENAI_ENDPOINT` (`*.openai.azure.com`, no `/api/projects/...` path), not the Foundry project endpoint.
+
+If Azure returns `Tenant provided in token does not match resource tenant`, sign in with the tenant that owns the Foundry project:
+
+```powershell
+az login --tenant <tenant-id>
+```
 
 Outputs:
 
