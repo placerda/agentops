@@ -177,7 +177,7 @@ def test_orchestrator_swallows_publish_errors(tmp_path: Path):
         version=1,
         agent="model:gpt-4o-mini",
         dataset=Path("dataset.jsonl"),
-        publish="foundry",
+        publish=True,
     )
     output_dir = tmp_path / "out"
     output_dir.mkdir()
@@ -200,7 +200,7 @@ def test_orchestrator_writes_cloud_evaluation_metadata(tmp_path: Path):
         version=1,
         agent="model:gpt-4o-mini",
         dataset=Path("dataset.jsonl"),
-        publish="foundry",
+        publish=True,
         project_endpoint="https://contoso.services.ai.azure.com/api/projects/p",
     )
     output_dir = tmp_path / "out"
@@ -238,7 +238,7 @@ def test_orchestrator_dispatches_to_cloud_publisher_when_publish_is_foundry_clou
         version=1,
         agent="support-bot:1",
         dataset=dataset_path,
-        publish="foundry_cloud",
+        execution="cloud", publish=True,
         project_endpoint="https://contoso.services.ai.azure.com/api/projects/p",
     )
     output_dir = tmp_path / "out"
@@ -295,7 +295,7 @@ def test_orchestrator_swallows_cloud_publish_errors(tmp_path: Path):
         version=1,
         agent="support-bot:1",
         dataset=dataset_path,
-        publish="foundry_cloud",
+        execution="cloud", publish=True,
         project_endpoint="https://x.example/api/projects/p",
     )
     output_dir = tmp_path / "out"
@@ -341,7 +341,7 @@ def test_orchestrator_cloud_publish_requires_project_endpoint(tmp_path: Path, mo
         version=1,
         agent="support-bot:1",
         dataset=dataset_path,
-        publish="foundry_cloud",
+        execution="cloud", publish=True,
         project_endpoint=None,
     )
     output_dir = tmp_path / "out"

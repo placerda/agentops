@@ -233,11 +233,7 @@ class AgentOpsConfig(BaseModel):
             "- false (default): only local artifacts (results.json / report.md).\n"
             "- true: combined with 'execution' to decide the destination:\n"
             "  * execution: local + publish: true  → upload metrics to Classic Foundry.\n"
-            "  * execution: cloud + publish: true  → server-side run on New Foundry.\n"
-            "\n"
-            "Backward compatibility: the legacy string values 'foundry' and "
-            "'foundry_cloud' are still accepted and normalized into "
-            "(execution, publish)."
+            "  * execution: cloud + publish: true  → server-side run on New Foundry."
         ),
     )
     execution: ExecutionMode = Field(
@@ -258,43 +254,6 @@ class AgentOpsConfig(BaseModel):
     )
 
     model_config = ConfigDict(extra="forbid")
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_publish(cls, data: Any) -> Any:
-        """Translate legacy ``publish: foundry|foundry_cloud`` strings into
-        the new ``(execution, publish)`` pair.
-
-        Accepts:
-        - ``publish: foundry`` → ``execution: local,  publish: true``
-        - ``publish: foundry_cloud`` → ``execution: cloud, publish: true``
-        - ``publish: true|false`` (new shape) → passthrough
-        - ``publish: null`` / missing → defaults (``execution: local``, ``publish: false``)
-
-        Raises ``ValueError`` only for unknown string values.
-        """
-        if not isinstance(data, dict):
-            return data
-        publish = data.get("publish")
-        if publish is None or isinstance(publish, bool):
-            return data
-        if isinstance(publish, str):
-            normalized = publish.strip().lower()
-            if normalized == "foundry":
-                data["publish"] = True
-                data.setdefault("execution", "local")
-                return data
-            if normalized == "foundry_cloud":
-                data["publish"] = True
-                data.setdefault("execution", "cloud")
-                return data
-            raise ValueError(
-                f"publish must be a boolean (or legacy 'foundry'/'foundry_cloud'); "
-                f"got {publish!r}"
-            )
-        raise ValueError(
-            f"publish must be a boolean; got {type(publish).__name__}"
-        )
 
     @model_validator(mode="before")
     @classmethod

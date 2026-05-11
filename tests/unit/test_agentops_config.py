@@ -179,43 +179,19 @@ class TestAgentOpsConfig:
         assert parsed["groundedness"].value == 3.0
         assert parsed["coherence"].value == 3.5
 
-    def test_publish_foundry_accepted(self) -> None:
-        """Legacy 'publish: foundry' maps to (execution=local, publish=True)."""
+    def test_publish_true_with_default_execution(self) -> None:
+        """publish: true defaults to execution: local → Classic Foundry."""
         cfg = AgentOpsConfig(
             version=1,
             agent="my-rag:3",
             dataset="./qa.jsonl",
-            publish="foundry",
+            publish=True,
             project_endpoint="https://x.services.ai.azure.com/api/projects/p",
         )
         assert cfg.publish is True
         assert cfg.execution == "local"
         assert cfg.publish_target() == "foundry"
         assert cfg.project_endpoint.endswith("/projects/p")
-
-    def test_publish_foundry_cloud_legacy_string(self) -> None:
-        """Legacy 'publish: foundry_cloud' maps to (execution=cloud, publish=True)."""
-        cfg = AgentOpsConfig(
-            version=1,
-            agent="my-rag:3",
-            dataset="./qa.jsonl",
-            publish="foundry_cloud",
-        )
-        assert cfg.publish is True
-        assert cfg.execution == "cloud"
-        assert cfg.publish_target() == "foundry_cloud"
-
-    def test_publish_true_with_default_execution(self) -> None:
-        """publish: true (new shape) defaults to execution: local → Classic."""
-        cfg = AgentOpsConfig(
-            version=1,
-            agent="my-rag:3",
-            dataset="./qa.jsonl",
-            publish=True,
-        )
-        assert cfg.publish is True
-        assert cfg.execution == "local"
-        assert cfg.publish_target() == "foundry"
 
     def test_publish_true_with_cloud_execution(self) -> None:
         """publish: true + execution: cloud → New Foundry."""
@@ -235,14 +211,15 @@ class TestAgentOpsConfig:
         assert cfg.publish_target() is None
         assert cfg.project_endpoint is None
 
-    def test_publish_rejects_unknown_target(self) -> None:
+    def test_publish_rejects_string_values(self) -> None:
+        """publish must be a boolean — no legacy string aliases."""
         with pytest.raises(ValidationError):
             AgentOpsConfig.model_validate(
                 {
                     "version": 1,
                     "agent": "my-rag:3",
                     "dataset": "./qa.jsonl",
-                    "publish": "datadog",
+                    "publish": "foundry",
                 }
             )
 
