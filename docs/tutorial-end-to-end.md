@@ -191,12 +191,10 @@ agentops init
 You get:
 
 ```
+agentops.yaml
 .agentops/
-├── agentops.yaml
 ├── data/
 │   └── smoke.jsonl
-├── datasets/
-│   └── smoke.yaml
 └── results/
 .github/
 └── skills/
@@ -210,7 +208,7 @@ support agent:
 version: 1
 agent: "support-bot:1"
 
-dataset: ./data/tickets.jsonl
+dataset: .agentops/data/tickets.jsonl
 
 thresholds:
   # Tool-calling metrics (auto-inferred from tool_definitions /

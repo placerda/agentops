@@ -13,7 +13,7 @@ This tutorial covers the simplest end-to-end AgentOps flow: bootstrap a workspac
 - A small JSONL dataset.
 - One `agentops eval run` execution producing `results.json` and `report.md`.
 
-The rest of the toolkit (legacy bundles, multi-file workspaces, custom adapters) still works, but is not required for the common case.
+The former bundle-based, multi-file workspace has been replaced by this flat `agentops.yaml` workflow for the common case.
 
 ## Prerequisites
 
@@ -57,12 +57,23 @@ Open `agentops.yaml` and set the `agent:` field. The classifier infers the targe
 | `"https://api.example.com/chat"`                         | Generic HTTP/JSON agent              |
 | `"model:gpt-4o"`                                         | Raw Foundry model deployment         |
 
+For Foundry prompt agents, use the agent name plus the published version number shown in Foundry, without the `v` prefix. For example, an agent named `my-agent` with published version `v2` is referenced as `my-agent:2`.
+
 The full minimal config is just:
 
 ```yaml
 version: 1
 agent: "customer-support:3"
 dataset: .agentops/data/smoke.jsonl
+```
+
+If your target is a Foundry prompt agent (`name:version`) and you want the evaluation to run server-side and appear in the New Foundry Evaluations panel, opt in to cloud publishing:
+
+```yaml
+version: 1
+agent: "customer-support:3"
+dataset: .agentops/data/smoke.jsonl
+publish: foundry_cloud
 ```
 
 ## 4. Run the evaluation
@@ -80,11 +91,15 @@ Outputs:
 .agentops/results/
 ├── 2026-05-06T14-30-22Z/   # Timestamped run (immutable history)
 │   ├── results.json
-│   └── report.md
+│   ├── report.md
+│   └── cloud_evaluation.json   # when publish: foundry_cloud is set
 └── latest/                 # Mirror of the most recent run
     ├── results.json
-    └── report.md
+    ├── report.md
+    └── cloud_evaluation.json   # when publish: foundry_cloud is set
 ```
+
+Without `publish`, AgentOps runs locally and only writes local artifacts. With `publish: foundry_cloud`, Foundry runs the agent and built-in evaluators server-side; `cloud_evaluation.json` includes the Foundry `eval_id`, `run_id`, status, and `report_url`.
 
 To view the report rendered (tables, ✅/❌), open it in VS Code and press `Ctrl+Shift+V`:
 
@@ -138,4 +153,4 @@ evaluators:
 
 - [`docs/how-it-works.md`](how-it-works.md) — architecture and request flow.
 - [`docs/ci-github-actions.md`](ci-github-actions.md) — wire AgentOps into PR checks with OIDC auth.
-- The existing tutorials still apply if you stay on the legacy multi-file layout.
+- The scenario tutorials use the same flat `agentops.yaml` workflow with more realistic datasets and targets.

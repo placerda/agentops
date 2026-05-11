@@ -25,9 +25,12 @@ dataset: .agentops/data/smoke.jsonl
 #   groundedness: ">=3"
 #   avg_latency_seconds: "<=10"
 
-# Optional. Publish the run to the New Foundry Evaluations panel after writing
-# results.json/report.md locally. Requires AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
-# (or 'project_endpoint' below).
+# Optional. Publish controls Foundry visibility. With foundry_cloud it also
+# moves evaluator execution to Foundry server-side.
+# Requires AZURE_AI_FOUNDRY_PROJECT_ENDPOINT (or 'project_endpoint' below).
 #
-# publish: foundry
+# - foundry_cloud: run + results in New Foundry (preview, name:version agents)
+# - foundry: local run, then upload metrics to Classic Foundry
+#
+# publish: foundry_cloud
 # project_endpoint: "https://<resource>.services.ai.azure.com/api/projects/<project>"

@@ -2,7 +2,7 @@
 
 This module is invoked from :mod:`agentops.pipeline.orchestrator` only when
 ``publish: foundry`` is set in ``agentops.yaml``. It uploads the same metrics
-that AgentOps already computed locally into the **New Foundry Evaluations**
+that AgentOps already computed locally into the **Classic Foundry Evaluations**
 panel, using the public ``_log_metrics_and_instance_results_onedp`` helper
 from ``azure.ai.evaluation``.
 

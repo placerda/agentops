@@ -98,7 +98,8 @@ When you run `agentops eval run`, the following happens step by step:
  9. Evaluate thresholds           (pipeline/thresholds.py — pass/fail per metric)
 10. Write results.json + report.md (pipeline/reporter.py)
 11. Sync .agentops/results/latest/
-12. (Optional) Publish to Foundry (pipeline/publisher.py or cloud_publisher.py)
+12. (Optional) Publish local metrics to Classic Foundry (`publish: foundry`)
+    or submit a server-side New Foundry run (`publish: foundry_cloud`)
 13. CLI returns exit code         (0 = pass, 2 = threshold fail, 1 = error)
 ```
 
@@ -215,7 +216,7 @@ which fields make sense (e.g. `protocol` is rejected for
 
 ### Examples
 
-**Foundry prompt agent (RAG bundle auto-selected from dataset rows):**
+**Foundry prompt agent (RAG evaluators auto-selected from dataset rows):**
 
 ```yaml
 version: 1
@@ -225,7 +226,7 @@ thresholds:
   groundedness: ">=3"
   coherence: ">=3"
   avg_latency_seconds: "<=10"
-publish: foundry      # Classic Foundry Evaluations panel (best-effort)
+publish: foundry      # local run, then upload metrics to Classic Foundry
 ```
 
 **HTTP-deployed agent (LangGraph / ACA / custom REST):**
@@ -292,10 +293,10 @@ Selection rules (in order):
 1. If `evaluators:` is set in `agentops.yaml`, use it verbatim (escape hatch).
 2. Otherwise, start from the **quality baseline** for the resolved target
    kind (e.g. `Coherence + Fluency + Similarity + F1Score` for chat-style agents).
-3. If dataset rows include `context`, add the **RAG bundle**
+3. If dataset rows include `context`, add the **RAG evaluator set**
    (`Groundedness`, `Relevance`, `Retrieval`, `ResponseCompleteness`).
 4. If rows include `tool_calls` + `tool_definitions`, add the **tool-use
-   bundle** (`ToolCallAccuracy`, `IntentResolution`, `TaskAdherence`, …).
+   evaluator set** (`ToolCallAccuracy`, `IntentResolution`, `TaskAdherence`, …).
 5. `avg_latency_seconds` is always included as a runtime metric.
 
 ### Recommended judge models
@@ -328,14 +329,16 @@ if every threshold passes. The run passes only if every row passes
 
 ## Publishing to Foundry Evaluations
 
-`publish:` is opt-in. Both modes are best-effort: if publish fails, the
-local `results.json` and `report.md` remain the canonical record and the
-exit code reflects only thresholds, not publish failures.
+`publish:` is opt-in. It primarily controls Foundry visibility, but
+`publish: foundry_cloud` also changes where evaluator execution happens.
+Both modes are best-effort: if publish fails, the local `results.json` and
+`report.md` remain the canonical record and the exit code reflects only
+thresholds, not publish failures.
 
-| Mode | What it does | Where results land | Target restriction |
+| Mode | Where evaluation runs | Where results land | Target restriction |
 |---|---|---|---|
-| `publish: foundry` | Uploads metrics computed locally via OneDP. | **Classic** Foundry Evaluations panel. | Any target kind. |
-| `publish: foundry_cloud` (preview) | Re-runs the agent + builtin evaluators **server-side** via the OpenAI Evals API. | **New** Foundry Evaluations panel. | `foundry_prompt` only (`name:version` Foundry agents). |
+| `publish: foundry` | Locally in AgentOps, then uploads computed metrics via OneDP. | **Classic** Foundry Evaluations panel. | Any target kind. |
+| `publish: foundry_cloud` (preview) | Server-side in Foundry via the OpenAI Evals API. | **New** Foundry Evaluations panel. | `foundry_prompt` only (`name:version` Foundry agents). |
 
 Both modes:
 

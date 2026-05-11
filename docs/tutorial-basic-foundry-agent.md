@@ -71,7 +71,7 @@ Choose a model deployment (e.g., `gpt-5.1`) and save the agent.
 
 After saving, you need the agent's identifier for the run config. There are two types:
 
-- **Named agents** (new Foundry experience): use the agent name, optionally with a version — e.g., `my-agent` or `my-agent:3`
+- **Named agents** (new Foundry experience): use the agent name, optionally with a published version number — e.g., `my-agent` or `my-agent:3`. If Foundry shows `v3`, write `:3` without the `v`.
 - **Legacy agents** (asst_ prefix): use the full ID — e.g., `asst_ftDQySPlKUwcgR1eiXEzUEO5`
 
 AgentOps handles both. Named agents use the Foundry Responses API; legacy agents use the Threads API.
@@ -110,6 +110,7 @@ Open `agentops.yaml` at your project root and point it at your agent:
 version: 1
 agent: "my-agent:1"                       # ← your agent name:version (or asst_ ID)
 dataset: .agentops/data/smoke-agent-tools.jsonl
+publish: foundry_cloud                    # optional: show the run in New Foundry Evaluations
 thresholds:
   similarity: ">=3"
   avg_latency_seconds: "<=20"
@@ -122,6 +123,11 @@ Key points:
   taken from `AZURE_OPENAI_DEPLOYMENT` (set in Part 2).
 - Evaluators are auto-selected from the dataset row shape — `input` +
   `expected` triggers `SimilarityEvaluator`. No `bundle` to maintain.
+- `publish: foundry_cloud` is optional. It means Foundry runs the agent and
+  built-in evaluators server-side, then shows the run in the New Foundry
+  Evaluations panel and writes `cloud_evaluation.json` with the portal URL.
+  Remove it if you only want AgentOps to run locally and write `results.json`
+  and `report.md`.
 
 ## Part 4: Review the dataset
 
