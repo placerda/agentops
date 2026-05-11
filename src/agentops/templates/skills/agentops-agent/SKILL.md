@@ -86,10 +86,19 @@ the analyzer appends to on every run — and renders the latest counts,
 per-category cards, and sparklines of the last 12 analyses. No Azure
 resource needed; it's read-only and bound to localhost.
 
-When telemetry is enabled (`APPLICATIONINSIGHTS_CONNECTION_STRING` or
-`AGENTOPS_OTLP_ENDPOINT`), the analyzer **also** emits OpenTelemetry
+When telemetry is enabled the analyzer **also** emits OpenTelemetry
 spans (`ANALYZE watchdog`) with per-severity / per-category counters,
 useful for long-term retention in App Insights or any OTel backend.
+Resolution order:
+
+1. `APPLICATIONINSIGHTS_CONNECTION_STRING` (or the AgentOps-prefixed
+   variant) — explicit user configuration always wins.
+2. `AGENTOPS_OTLP_ENDPOINT` — generic OTLP/HTTP exporter.
+3. **Auto-discovery** — when `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT` is
+   set but no explicit env var is, AgentOps asks the Foundry project
+   for the connection string of the Application Insights resource
+   attached to it. Zero configuration when the user is already on
+   Foundry.
 
 ## Copilot Extension server
 

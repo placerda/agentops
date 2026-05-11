@@ -34,6 +34,19 @@ def is_enabled() -> bool:
 def init_tracing() -> None:
     """Initialise tracing when Azure Monitor or OTLP export is configured.
 
+    Resolution order for the App Insights connection string:
+
+    1. ``APPLICATIONINSIGHTS_CONNECTION_STRING`` (or the AgentOps-prefixed
+       variant) — explicit user configuration always wins.
+    2. ``AGENTOPS_OTLP_ENDPOINT`` — use a generic OTLP/HTTP exporter.
+    3. **Auto-discovery**: when neither of the above is set but
+       ``AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`` is, ask the Foundry project
+       (via the ``azure-ai-projects`` SDK) for the connection string of
+       the Application Insights resource attached to it. This lets
+       eval runs and watchdog analyses emit traces into the same App
+       Insights the Foundry project already uses, without any extra
+       configuration.
+
     Safe to call multiple times; only the first call has an effect.
     """
     global _tracer, _tracing_enabled  # noqa: PLW0603
@@ -45,6 +58,18 @@ def init_tracing() -> None:
         "APPLICATIONINSIGHTS_CONNECTION_STRING"
     ) or os.getenv("AGENTOPS_APPLICATIONINSIGHTS_CONNECTION_STRING")
     otlp_endpoint = os.getenv("AGENTOPS_OTLP_ENDPOINT")
+
+    if not appinsights_connection_string and not otlp_endpoint:
+        # Fallback: ask the Foundry project for the App Insights it owns.
+        try:
+            from agentops.utils.foundry_discovery import (
+                resolve_appinsights_connection_from_env,
+            )
+            appinsights_connection_string = resolve_appinsights_connection_from_env()
+        except Exception:  # noqa: BLE001
+            # Discovery is best-effort — never raise into init_tracing.
+            appinsights_connection_string = None
+
     if not appinsights_connection_string and not otlp_endpoint:
         return
 

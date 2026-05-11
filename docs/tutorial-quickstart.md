@@ -259,8 +259,15 @@ generated below to get the same view automatically on every PR.
 > terminal) to open a FitBit-inspired dashboard at
 > http://127.0.0.1:8090 that shows the counts and sparklines without
 > opening every report.md by hand. The dashboard is read-only and
-> requires no Azure resource. When `APPLICATIONINSIGHTS_CONNECTION_STRING`
-> is set, the same analyses are also emitted as OpenTelemetry traces.
+> requires no Azure resource.
+>
+> **Traces (zero config)** — analyses are also emitted as OpenTelemetry
+> spans (`ANALYZE watchdog`). When `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`
+> is set (it already is, for cloud execution), AgentOps auto-discovers
+> the Application Insights resource attached to the Foundry project
+> and routes traces there — no extra environment variable needed.
+> Set `APPLICATIONINSIGHTS_CONNECTION_STRING` explicitly only when you
+> want to send traces to a different App Insights.
 
 ## 8. Generate the CI/CD workflows
 
