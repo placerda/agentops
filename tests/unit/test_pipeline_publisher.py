@@ -299,6 +299,12 @@ def test_run_evaluation_cloud_uses_cloud_publisher_and_does_not_invoke_locally(
     assert result.rows[0].response == "hello"
     assert {m.name for m in result.rows[0].metrics} == {"similarity", "coherence"}
 
+    # Runtime (client-side) evaluators must be excluded from the cloud
+    # path — otherwise their missing aggregates would fail the run.
+    assert "avg_latency_seconds" not in result.evaluators
+    threshold_metrics = {t.metric for t in result.thresholds}
+    assert "avg_latency_seconds" not in threshold_metrics
+
     # cloud_evaluation.json was written.
     meta_path = output_dir / "cloud_evaluation.json"
     assert meta_path.exists()

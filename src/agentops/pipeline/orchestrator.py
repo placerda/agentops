@@ -253,10 +253,21 @@ def _run_evaluation_cloud(
     overrides = (
         [override.name for override in config.evaluators] if config.evaluators else None
     )
-    presets = select_evaluators(target, shape, overrides=overrides)
+    all_presets = select_evaluators(target, shape, overrides=overrides)
+
+    # Cloud execution runs server-side, so client-side runtime evaluators
+    # (e.g. avg_latency_seconds) cannot be measured. Excluding them is the
+    # right choice — otherwise their default thresholds would mark the run
+    # FAILED for a metric we never had a chance to observe.
+    presets = [p for p in all_presets if "runtime" not in p.categories]
+    skipped_runtime = [p.name for p in all_presets if "runtime" in p.categories]
+
     user_thresholds = [
         Threshold.from_expression(metric, expr)
         for metric, expr in config.thresholds.items()
+        # Drop user-specified thresholds for runtime metrics too — they
+        # would otherwise fail with actual="missing".
+        if metric not in {p.score_key for p in all_presets if "runtime" in p.categories}
     ]
     threshold_rules = merge_thresholds(presets, user_thresholds)
 
@@ -286,6 +297,11 @@ def _run_evaluation_cloud(
         f"and {style(str(len(presets)), 'bold')} evaluator(s) server-side. "
         f"Agent: {style(target.raw, 'bold')}."
     )
+    if skipped_runtime:
+        progress(
+            f"  (skipped client-side runtime evaluators: "
+            f"{', '.join(skipped_runtime)} — not measurable in cloud mode)"
+        )
 
     shell_result = RunResult(
         started_at=started_at.isoformat(),
