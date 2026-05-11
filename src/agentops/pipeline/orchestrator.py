@@ -34,6 +34,7 @@ from agentops.core.results import (
 )
 from agentops.pipeline import comparison as comparison_module
 from agentops.pipeline import invocations, publisher, reporter, runtime, thresholds
+from agentops.pipeline.diagnostics import with_tenant_mismatch_guidance
 from agentops.utils import telemetry
 from agentops.utils.colors import style
 
@@ -287,9 +288,10 @@ def _publish_to_foundry_cloud_safely(
             progress=notify,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("foundry_cloud publish failed: %s", exc)
+        message = with_tenant_mismatch_guidance(str(exc))
+        logger.warning("foundry_cloud publish failed: %s", message)
         notify(
-            f"{style('publish foundry_cloud FAILED', 'red')}: {exc}. "
+            f"{style('publish foundry_cloud FAILED', 'red')}: {message}. "
             f"Local results.json is the source of truth."
         )
         return

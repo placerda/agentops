@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from agentops.core.agentops_config import AgentOpsConfig, TargetResolution
+from agentops.pipeline.diagnostics import with_tenant_mismatch_guidance
 
 
 @dataclass
@@ -153,12 +154,7 @@ def _http_request_json(
                 last_exc = exc
                 continue
             message = f"HTTP {exc.code} from {url}: {detail or exc.reason}"
-            if "Tenant provided in token does not match resource tenant" in detail:
-                message += (
-                    " Check that `az login` is using the same tenant as the "
-                    "Foundry project, or run `az login --tenant <tenant-id>`."
-                )
-            raise RuntimeError(message) from exc
+            raise RuntimeError(with_tenant_mismatch_guidance(message)) from exc
         except urllib.error.URLError as exc:
             if attempt < 3:
                 time.sleep(2 ** attempt)
