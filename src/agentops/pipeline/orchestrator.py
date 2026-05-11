@@ -328,10 +328,10 @@ def _run_evaluation_cloud(
             "agentops.yaml or the AZURE_AI_FOUNDRY_PROJECT_ENDPOINT env var."
         )
 
-    from agentops.pipeline import cloud_publisher
+    from agentops.pipeline import cloud_runner
     from agentops.pipeline import cloud_results
 
-    published = cloud_publisher.publish_to_foundry_cloud(
+    published = cloud_runner.run_on_foundry_cloud(
         shell_result,
         dataset_path=dataset_path,
         project_endpoint=endpoint,

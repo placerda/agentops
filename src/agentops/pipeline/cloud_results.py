@@ -25,7 +25,7 @@ def rows_from_cloud_output_items(
     """Build a list of :class:`RowResult` from raw Foundry output items.
 
     ``output_items`` is the list returned by
-    ``cloud_publisher._list_output_items``. Each item is a dict with at
+    ``cloud_runner._list_output_items``. Each item is a dict with at
     least ``datasource_item``, ``sample`` and ``results``; missing keys
     yield blank fields rather than raising.
     """

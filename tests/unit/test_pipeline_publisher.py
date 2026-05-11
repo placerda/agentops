@@ -222,14 +222,14 @@ def test_orchestrator_writes_cloud_evaluation_metadata(tmp_path: Path):
     assert payload["evaluation_name"] == "agentops-eval-abc"
 
 
-def test_run_evaluation_cloud_uses_cloud_publisher_and_does_not_invoke_locally(
+def test_run_evaluation_cloud_uses_cloud_runner_and_does_not_invoke_locally(
     tmp_path: Path,
 ):
-    """execution: cloud must route through cloud_publisher and skip the
+    """execution: cloud must route through cloud_runner and skip the
     local row-by-row invocation entirely. Per-row results come from the
     Foundry output_items download."""
     from agentops.core.agentops_config import AgentOpsConfig
-    from agentops.pipeline import cloud_publisher as _cp
+    from agentops.pipeline import cloud_runner as _cp
     from agentops.pipeline import orchestrator
 
     dataset_path = tmp_path / "dataset.jsonl"
@@ -249,7 +249,7 @@ def test_run_evaluation_cloud_uses_cloud_publisher_and_does_not_invoke_locally(
     output_dir = tmp_path / "out"
     output_dir.mkdir()
 
-    fake_published = _cp.CloudPublishResult(
+    fake_published = _cp.CloudRunResult(
         eval_id="eval-1",
         run_id="run-1",
         status="completed",
@@ -276,7 +276,7 @@ def test_run_evaluation_cloud_uses_cloud_publisher_and_does_not_invoke_locally(
     )
 
     with mock.patch.object(
-        _cp, "publish_to_foundry_cloud", return_value=fake_published,
+        _cp, "run_on_foundry_cloud", return_value=fake_published,
     ) as cloud_mock, mock.patch.object(
         publisher, "publish_to_foundry",
     ) as classic_mock, mock.patch.object(

@@ -50,7 +50,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from agentops.core.results import RunResult
 
-logger = logging.getLogger("agentops.pipeline.cloud_publisher")
+logger = logging.getLogger("agentops.pipeline.cloud_runner")
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ logger = logging.getLogger("agentops.pipeline.cloud_publisher")
 
 
 @dataclass(frozen=True)
-class CloudPublishResult:
+class CloudRunResult:
     """Outcome of a cloud (New Foundry) publish."""
 
     eval_id: str
@@ -127,7 +127,7 @@ _TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled"}
 # ---------------------------------------------------------------------------
 
 
-def publish_to_foundry_cloud(
+def run_on_foundry_cloud(
     result: RunResult,
     *,
     dataset_path: Path,
@@ -136,7 +136,7 @@ def publish_to_foundry_cloud(
     poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
     max_poll_attempts: int = _DEFAULT_MAX_POLL_ATTEMPTS,
     progress: Optional[Callable[[str], None]] = None,
-) -> CloudPublishResult:
+) -> CloudRunResult:
     """Submit ``result``'s target to Foundry for server-side evaluation.
 
     Parameters
@@ -220,13 +220,13 @@ def publish_to_foundry_cloud(
             "criteria; nothing to evaluate server-side."
         )
 
-    progress(f"cloud publish: preparing run '{eval_name}'")
+    progress(f"cloud: preparing run '{eval_name}'")
 
     item_schema = _build_item_schema(dataset_path)
     source = _build_file_content_source(dataset_path, progress=progress)
 
     progress(
-        f"cloud publish: creating eval ({len(testing_criteria)} criteria, "
+        f"cloud: creating eval ({len(testing_criteria)} criteria, "
         f"item_schema fields: {sorted(item_schema['properties'].keys())})"
     )
     eval_obj = openai_client.evals.create(
@@ -241,7 +241,7 @@ def publish_to_foundry_cloud(
     eval_id = eval_obj.id
 
     progress(
-        f"cloud publish: starting run for agent {agent_name}:{agent_version}"
+        f"cloud: starting run for agent {agent_name}:{agent_version}"
     )
     run_obj = openai_client.evals.runs.create(
         eval_id=eval_id,
@@ -272,7 +272,7 @@ def publish_to_foundry_cloud(
     run_id = run_obj.id
 
     progress(
-        f"cloud publish: polling run {run_id} (interval "
+        f"cloud: polling run {run_id} (interval "
         f"{poll_interval_seconds:g}s, max {max_poll_attempts} attempts)"
     )
     final_run = _poll_until_terminal(
@@ -293,7 +293,7 @@ def publish_to_foundry_cloud(
             f"{status!r}; see {report_url or 'the Foundry portal'}."
         )
 
-    progress(f"cloud publish: done. status={status}")
+    progress(f"cloud: done. status={status}")
 
     # Download per-row results from Foundry so the local results.json can
     # be populated without re-invoking the agent client-side.
@@ -304,7 +304,7 @@ def publish_to_foundry_cloud(
         progress=progress,
     )
 
-    return CloudPublishResult(
+    return CloudRunResult(
         eval_id=eval_id,
         run_id=run_id,
         status=status,
@@ -411,7 +411,7 @@ def _build_file_content_source(
     service-side filename loss where valid ``.jsonl`` uploads can be read back
     as extensionless files.
     """
-    progress(f"cloud publish: preparing {dataset_path.name}")
+    progress(f"cloud: preparing {dataset_path.name}")
     content: List[Dict[str, Any]] = []
     with dataset_path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -427,7 +427,7 @@ def _build_file_content_source(
             content.append({"item": row})
     if not content:
         raise ValueError("dataset must contain at least one row for publish: foundry_cloud")
-    progress(f"cloud publish: prepared {len(content)} row(s)")
+    progress(f"cloud: prepared {len(content)} row(s)")
     return {
         "type": "file_content",
         "content": content,
@@ -481,7 +481,7 @@ def _poll_until_terminal(
         status = getattr(run, "status", "unknown")
         if status != last_status:
             progress(
-                f"cloud publish: run status -> {status} "
+                f"cloud: run status -> {status} "
                 f"(attempt {attempt}/{max_attempts})"
             )
             last_status = status
@@ -534,7 +534,7 @@ def _list_output_items(
     except Exception as exc:  # noqa: BLE001
         logger.debug("could not list output_items: %s", exc)
         progress(
-            f"cloud publish: WARNING — could not download per-row results "
+            f"cloud: WARNING — could not download per-row results "
             f"({exc.__class__.__name__}); local results.json will record the "
             f"portal URL only."
         )
@@ -550,12 +550,12 @@ def _list_output_items(
     except Exception as exc:  # noqa: BLE001
         logger.debug("could not iterate output_items: %s", exc)
         progress(
-            f"cloud publish: WARNING — failed to iterate output_items "
+            f"cloud: WARNING — failed to iterate output_items "
             f"({exc.__class__.__name__}); local results.json will be thin."
         )
         return []
 
-    progress(f"cloud publish: downloaded {len(items)} output item(s)")
+    progress(f"cloud: downloaded {len(items)} output item(s)")
     return items
 
 

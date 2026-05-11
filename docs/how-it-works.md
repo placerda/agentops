@@ -48,7 +48,7 @@ src/
     │   ├── reporter.py        # Markdown report generation
     │   ├── comparison.py      # Baseline delta rendering for `eval run --baseline`
     │   ├── publisher.py       # Classic Foundry publish (OneDP upload of metrics)
-    │   └── cloud_publisher.py # New Foundry publish (server-side via OpenAI Evals API)
+    │   └── cloud_runner.py # New Foundry publish (server-side via OpenAI Evals API)
     │
     ├── services/              # Workspace / project tooling
     │   ├── initializer.py     # `agentops init` workspace scaffolding
@@ -77,7 +77,7 @@ src/
 | Change pre-flight checks | `pipeline/runtime.py` |
 | Add a new invocation strategy (new target kind) | `pipeline/invocations.py` + `core/agentops_config.py::classify_agent` |
 | Tweak the report layout | `pipeline/reporter.py` |
-| Add or change a publish destination | `pipeline/publisher.py` (Classic) or `pipeline/cloud_publisher.py` (New Foundry); register in `pipeline/orchestrator.py` |
+| Add or change a publish destination | `pipeline/publisher.py` (Classic) or `pipeline/cloud_runner.py` (New Foundry); register in `pipeline/orchestrator.py` |
 | Add a new CLI command | `cli/app.py` (keep it thin — delegate to `pipeline/` or `services/`) |
 | Add a starter template | `templates/` + update `pyproject.toml` package-data |
 | Add a coding agent skill | `templates/skills/<name>/SKILL.md` + sync to `plugins/agentops/skills/` (`scripts/sync-skills.{sh,ps1}`) |
@@ -360,7 +360,7 @@ The cloud-mode trade-offs (so you can decide consciously):
 * Polling adds ~5 s × N to the total wall-clock time.
 
 Implementation lives in [src/agentops/pipeline/publisher.py](../src/agentops/pipeline/publisher.py)
-(Classic) and [src/agentops/pipeline/cloud_publisher.py](../src/agentops/pipeline/cloud_publisher.py)
+(Classic) and [src/agentops/pipeline/cloud_runner.py](../src/agentops/pipeline/cloud_runner.py)
 (New Foundry). Dispatch happens in
 [src/agentops/pipeline/orchestrator.py](../src/agentops/pipeline/orchestrator.py).
 

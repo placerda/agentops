@@ -16,7 +16,7 @@ from agentops.core.results import (
     RunSummary,
     TargetInfo,
 )
-from agentops.pipeline import cloud_publisher
+from agentops.pipeline import cloud_runner
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ def dataset_file(tmp_path: Path) -> Path:
 def test_build_testing_criteria_maps_quality_evaluators(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
     result = _make_result()
-    criteria = cloud_publisher._build_testing_criteria(result)
+    criteria = cloud_runner._build_testing_criteria(result)
 
     azure_names = {c["evaluator_name"] for c in criteria}
     assert "builtin.coherence" in azure_names
@@ -105,7 +105,7 @@ def test_build_testing_criteria_skips_latency(monkeypatch):
     azure_ai_evaluator (Foundry has its own server-side latency view)."""
     monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
     result = _make_result()
-    criteria = cloud_publisher._build_testing_criteria(result)
+    criteria = cloud_runner._build_testing_criteria(result)
     names = {c["name"] for c in criteria}
     assert "avg_latency_seconds" not in names
 
@@ -117,7 +117,7 @@ def test_build_testing_criteria_uses_selected_evaluators_when_metrics_empty(monk
     result = _make_result()
     result.aggregate_metrics.clear()
 
-    criteria = cloud_publisher._build_testing_criteria(result)
+    criteria = cloud_runner._build_testing_criteria(result)
 
     azure_names = {c["evaluator_name"] for c in criteria}
     assert "builtin.coherence" in azure_names
@@ -129,7 +129,7 @@ def test_build_testing_criteria_requires_deployment_for_ai_evaluators(monkeypatc
     monkeypatch.delenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", raising=False)
 
     with pytest.raises(ValueError, match="AZURE_OPENAI_DEPLOYMENT"):
-        cloud_publisher._build_testing_criteria(_make_result())
+        cloud_runner._build_testing_criteria(_make_result())
 
 
 def test_build_testing_criteria_warns_on_unknown_evaluator(caplog):
@@ -153,7 +153,7 @@ def test_build_testing_criteria_warns_on_unknown_evaluator(caplog):
     result.aggregate_metrics.clear()
     with mock.patch.dict(_ev.CATALOG, {"MyCustomEvaluator": fake}):
         with caplog.at_level("WARNING"):
-            criteria = cloud_publisher._build_testing_criteria(result)
+            criteria = cloud_runner._build_testing_criteria(result)
     assert all(c["name"] != "my_custom" for c in criteria)
     assert any("no azure_ai_evaluator mapping" in rec.message for rec in caplog.records)
 
@@ -164,7 +164,7 @@ def test_build_testing_criteria_warns_on_unknown_evaluator(caplog):
 
 
 def test_build_item_schema_uses_first_row_keys(dataset_file: Path):
-    schema = cloud_publisher._build_item_schema(dataset_file)
+    schema = cloud_runner._build_item_schema(dataset_file)
     assert schema["type"] == "object"
     assert set(schema["properties"].keys()) == {"input", "expected"}
     assert set(schema["required"]) == {"input", "expected"}
@@ -173,7 +173,7 @@ def test_build_item_schema_uses_first_row_keys(dataset_file: Path):
 def test_build_item_schema_empty_file_falls_back(tmp_path: Path):
     empty = tmp_path / "empty.jsonl"
     empty.write_text("", encoding="utf-8")
-    schema = cloud_publisher._build_item_schema(empty)
+    schema = cloud_runner._build_item_schema(empty)
     assert "input" in schema["properties"]
 
 
@@ -185,7 +185,7 @@ def test_build_item_schema_empty_file_falls_back(tmp_path: Path):
 def test_publish_rejects_non_foundry_targets(dataset_file: Path):
     result = _make_result(kind="http_json")
     with pytest.raises(ValueError, match="foundry_cloud only supports"):
-        cloud_publisher.publish_to_foundry_cloud(
+        cloud_runner.run_on_foundry_cloud(
             result,
             dataset_path=dataset_file,
             project_endpoint="https://x.example/api/projects/p",
@@ -196,7 +196,7 @@ def test_publish_requires_dataset_to_exist(tmp_path: Path):
     result = _make_result()
     missing = tmp_path / "does_not_exist.jsonl"
     with pytest.raises(ValueError, match="dataset file not found"):
-        cloud_publisher.publish_to_foundry_cloud(
+        cloud_runner.run_on_foundry_cloud(
             result,
             dataset_path=missing,
             project_endpoint="https://x.example/api/projects/p",
@@ -212,7 +212,7 @@ def test_publish_requires_name_and_version(dataset_file: Path):
         kind="foundry_prompt", raw="bot:1", name=None, version="1",
     )
     with pytest.raises(ValueError, match="fully qualified"):
-        cloud_publisher.publish_to_foundry_cloud(
+        cloud_runner.run_on_foundry_cloud(
             result,
             dataset_path=dataset_file,
             project_endpoint="https://x.example/api/projects/p",
@@ -235,8 +235,8 @@ def test_poll_returns_when_status_completed():
     fake_evals = SimpleNamespace(runs=fake_runs)
     fake_client = SimpleNamespace(evals=fake_evals)
 
-    with mock.patch("agentops.pipeline.cloud_publisher.time.sleep") as sleep:
-        run = cloud_publisher._poll_until_terminal(
+    with mock.patch("agentops.pipeline.cloud_runner.time.sleep") as sleep:
+        run = cloud_runner._poll_until_terminal(
             fake_client,
             eval_id="e1", run_id="r1",
             interval_seconds=0.0, max_attempts=10,
@@ -257,9 +257,9 @@ def test_poll_times_out_when_never_terminal():
     fake_evals = SimpleNamespace(runs=fake_runs)
     fake_client = SimpleNamespace(evals=fake_evals)
 
-    with mock.patch("agentops.pipeline.cloud_publisher.time.sleep"):
+    with mock.patch("agentops.pipeline.cloud_runner.time.sleep"):
         with pytest.raises(RuntimeError, match="did not finish"):
-            cloud_publisher._poll_until_terminal(
+            cloud_runner._poll_until_terminal(
                 fake_client,
                 eval_id="e1", run_id="r1",
                 interval_seconds=0.0, max_attempts=3,
@@ -274,7 +274,7 @@ def test_poll_times_out_when_never_terminal():
 
 def test_extract_report_url_from_attribute():
     run = SimpleNamespace(report_url="https://portal/x", status="completed")
-    assert cloud_publisher._extract_report_url(run) == "https://portal/x"
+    assert cloud_runner._extract_report_url(run) == "https://portal/x"
 
 
 def test_extract_report_url_from_metadata():
@@ -282,12 +282,12 @@ def test_extract_report_url_from_metadata():
         status="completed",
         metadata={"report_url": "https://portal/y"},
     )
-    assert cloud_publisher._extract_report_url(run) == "https://portal/y"
+    assert cloud_runner._extract_report_url(run) == "https://portal/y"
 
 
 def test_extract_report_url_returns_none_when_absent():
     run = SimpleNamespace(status="completed")
-    assert cloud_publisher._extract_report_url(run) is None
+    assert cloud_runner._extract_report_url(run) is None
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +354,7 @@ class _FakeProjectClient:
         return self._openai
 
 
-def test_publish_to_foundry_cloud_happy_path(dataset_file: Path):
+def test_run_on_foundry_cloud_happy_path(dataset_file: Path):
     """End-to-end happy path with all Azure SDKs mocked.
 
     Verifies:
@@ -383,8 +383,8 @@ def test_publish_to_foundry_cloud_happy_path(dataset_file: Path):
         with mock.patch.dict(
             "os.environ", {"AZURE_OPENAI_DEPLOYMENT": "gpt-4o-mini"}
         ):
-            with mock.patch("agentops.pipeline.cloud_publisher.time.sleep"):
-                published = cloud_publisher.publish_to_foundry_cloud(
+            with mock.patch("agentops.pipeline.cloud_runner.time.sleep"):
+                published = cloud_runner.run_on_foundry_cloud(
                     _make_result(),
                 dataset_path=dataset_file,
                 project_endpoint="https://contoso.services.ai.azure.com/api/projects/p",
@@ -432,7 +432,7 @@ def test_publish_to_foundry_cloud_happy_path(dataset_file: Path):
     assert any("status -> completed" in m for m in progress_messages)
 
 
-def test_publish_to_foundry_cloud_raises_when_run_fails(dataset_file: Path):
+def test_run_on_foundry_cloud_raises_when_run_fails(dataset_file: Path):
     """A non-completed terminal status surfaces as a RuntimeError so the
     orchestrator can downgrade it to a warning + best-effort log."""
     fake_openai = _FakeOpenAIClient(statuses=["failed"])
@@ -452,9 +452,9 @@ def test_publish_to_foundry_cloud_raises_when_run_fails(dataset_file: Path):
         with mock.patch.dict(
             "os.environ", {"AZURE_OPENAI_DEPLOYMENT": "gpt-4o-mini"}
         ):
-            with mock.patch("agentops.pipeline.cloud_publisher.time.sleep"):
+            with mock.patch("agentops.pipeline.cloud_runner.time.sleep"):
                 with pytest.raises(RuntimeError, match="status 'failed'"):
-                    cloud_publisher.publish_to_foundry_cloud(
+                    cloud_runner.run_on_foundry_cloud(
                         _make_result(),
                         dataset_path=dataset_file,
                         project_endpoint="https://x.example/api/projects/p",
