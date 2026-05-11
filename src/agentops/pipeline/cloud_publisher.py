@@ -12,12 +12,12 @@ The flow:
 2. Get the OpenAI client via ``project_client.get_openai_client()``. We do
    **not** pass ``api_version`` — the SDK picks the correct one (passing
    one explicitly has historically caused 404s in this codebase).
-3. Upload the JSONL dataset as an OpenAI file with ``purpose="evals"``.
+3. Inline the JSONL dataset rows as a ``file_content`` source.
 4. Create the eval definition with ``client.evals.create(...)``, mapping
    each AgentOps evaluator preset onto an ``azure_ai_evaluator`` testing
    criterion.
 5. Create the run with ``client.evals.runs.create(...)``, pointing at the
-   uploaded file and using ``azure_ai_target_completions`` with an
+   inline rows and using ``azure_ai_target_completions`` with an
    ``agent_reference`` so Foundry invokes the agent itself.
 6. Poll until the run terminates, then return identifiers + the portal URL.
 
@@ -139,7 +139,7 @@ def publish_to_foundry_cloud(
         of evaluator presets that should map onto ``azure_ai_evaluator``
         testing criteria.
     dataset_path:
-        Path to the JSONL dataset to upload. Must already exist.
+        Path to the JSONL dataset to submit. Must already exist.
     project_endpoint:
         Foundry project endpoint URL (e.g.
         ``https://contoso.services.ai.azure.com/api/projects/p``).
@@ -215,8 +215,8 @@ def publish_to_foundry_cloud(
 
     progress(f"cloud publish: preparing run '{eval_name}'")
 
-    file_id = _upload_dataset(openai_client, dataset_path, progress=progress)
     item_schema = _build_item_schema(dataset_path)
+    source = _build_file_content_source(dataset_path, progress=progress)
 
     progress(
         f"cloud publish: creating eval ({len(testing_criteria)} criteria, "
@@ -241,10 +241,7 @@ def publish_to_foundry_cloud(
         name=f"{eval_name}-run",
         data_source={  # type: ignore[arg-type]
             "type": "azure_ai_target_completions",
-            "source": {
-                "type": "file_id",
-                "id": file_id,
-            },
+            "source": source,
             "input_messages": {
                 "type": "template",
                 "template": [
@@ -302,24 +299,6 @@ def publish_to_foundry_cloud(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _upload_dataset(
-    openai_client: Any,
-    dataset_path: Path,
-    *,
-    progress: Callable[[str], None],
-) -> str:
-    """Upload the dataset as an OpenAI file (purpose='evals')."""
-    progress(f"cloud publish: uploading {dataset_path.name}")
-    with dataset_path.open("rb") as handle:
-        uploaded = openai_client.files.create(
-            file=handle,
-            purpose="evals",
-        )
-    file_id = uploaded.id
-    progress(f"cloud publish: uploaded as file_id={file_id}")
-    return file_id
 
 
 def _build_testing_criteria(result: RunResult) -> List[Dict[str, Any]]:
@@ -400,6 +379,41 @@ def _build_cloud_data_mapping(preset: Any) -> Dict[str, str]:
         if mapped:
             mapping[field] = mapped
     return mapping
+
+
+def _build_file_content_source(
+    dataset_path: Path,
+    *,
+    progress: Callable[[str], None],
+) -> Dict[str, Any]:
+    """Inline JSONL rows for Foundry target-completions runs.
+
+    New Foundry currently validates file-id sources by extension after the
+    upload is materialized server-side. Inline ``file_content`` avoids a
+    service-side filename loss where valid ``.jsonl`` uploads can be read back
+    as extensionless files.
+    """
+    progress(f"cloud publish: preparing {dataset_path.name}")
+    content: List[Dict[str, Any]] = []
+    with dataset_path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            text = line.strip()
+            if not text:
+                continue
+            row = json.loads(text)
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"dataset row {line_number} must be a JSON object for "
+                    "publish: foundry_cloud"
+                )
+            content.append({"item": row})
+    if not content:
+        raise ValueError("dataset must contain at least one row for publish: foundry_cloud")
+    progress(f"cloud publish: prepared {len(content)} row(s)")
+    return {
+        "type": "file_content",
+        "content": content,
+    }
 
 
 def _build_item_schema(dataset_path: Path) -> Dict[str, Any]:

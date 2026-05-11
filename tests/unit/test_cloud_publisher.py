@@ -358,7 +358,7 @@ def test_publish_to_foundry_cloud_happy_path(dataset_file: Path):
     """End-to-end happy path with all Azure SDKs mocked.
 
     Verifies:
-    - dataset is uploaded with purpose='evals'
+    - dataset rows are inlined as file_content
     - testing_criteria contain only mappable evaluators (coherence + fluency)
     - data_source carries an azure_ai_agent target with name + version
     - target is built from result.target (not the raw string)
@@ -399,10 +399,6 @@ def test_publish_to_foundry_cloud_happy_path(dataset_file: Path):
     _, kwargs = fake_projects_module.AIProjectClient.call_args
     assert kwargs["endpoint"].endswith("/api/projects/p")
 
-    # The dataset was uploaded for evals.
-    assert fake_openai.files.uploaded
-    assert fake_openai.files.uploaded[0][1] == "evals"
-
     # Testing criteria contain only the mappable evaluators.
     criteria = fake_openai.evals.created_with["testing_criteria"]
     azure_names = {c["evaluator_name"] for c in criteria}
@@ -419,7 +415,11 @@ def test_publish_to_foundry_cloud_happy_path(dataset_file: Path):
     assert target["name"] == "support-bot"
     assert target["version"] == "1"
     assert data_source["input_messages"]["template"][0]["content"]["text"] == "{{item.input}}"
-    assert data_source["source"] == {"type": "file_id", "id": "file-abc"}
+    assert data_source["source"]["type"] == "file_content"
+    assert data_source["source"]["content"][0]["item"] == {
+        "input": "hi",
+        "expected": "hello",
+    }
 
     # Result captures status + portal URL.
     assert published.status == "completed"
@@ -428,7 +428,7 @@ def test_publish_to_foundry_cloud_happy_path(dataset_file: Path):
     assert published.report_url == "https://ai.azure.com/foundry/runs/run-xyz"
 
     # Progress messages went through.
-    assert any("uploading" in m for m in progress_messages)
+    assert any("prepared 2 row(s)" in m for m in progress_messages)
     assert any("status -> completed" in m for m in progress_messages)
 
 
