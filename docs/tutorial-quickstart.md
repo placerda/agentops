@@ -96,14 +96,12 @@ The top-level `version: 1` is the schema version of `agentops.yaml`
 (always `1` today). The trailing `:2` in `agent:` is the Foundry agent's
 published version — they are independent.
 
-If your target is a Foundry prompt agent (`name:version`) and you want the run to also appear in the New Foundry Evaluations panel, opt in to cloud publishing:
-
-```yaml
-version: 1
-agent: "agentops-smoke:2"
-dataset: .agentops/data/smoke.jsonl
-publish: foundry_cloud
-```
+> **Skipping `publish: foundry_cloud` in the quickstart.** Cloud publish
+> re-invokes the agent on Foundry's side after AgentOps already ran it
+> locally, which doubles the work on a smoke test. This tutorial keeps
+> the loop local; see [`docs/foundry-cloud-publish.md`](foundry-cloud-publish.md)
+> (TODO) once you want the run to show up in the New Foundry Evaluations
+> panel.
 
 > AgentOps also supports hosted Foundry endpoints, generic HTTP/JSON
 > endpoints, and raw model deployments. Those are covered in the scenario
@@ -193,7 +191,6 @@ after your baseline — typically `:3`):
 version: 1
 agent: "agentops-smoke:3"
 dataset: .agentops/data/smoke.jsonl
-publish: foundry_cloud
 ```
 
 Now compare the changed prompt against the captured baseline:

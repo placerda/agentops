@@ -222,7 +222,10 @@ _LATENCY = EvaluatorPreset(
     class_name="_latency",
     score_key="avg_latency_seconds",
     input_mapping={},
-    default_threshold=_t("avg_latency_seconds", "<=", 10.0),
+    # 30s default accommodates Foundry cold-start spikes on the first
+    # invocation after an agent is created or scaled to zero. Production
+    # users should tighten this in agentops.yaml once warmup is observed.
+    default_threshold=_t("avg_latency_seconds", "<=", 30.0),
     categories=frozenset({"runtime"}),
 )
 
