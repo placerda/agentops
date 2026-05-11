@@ -95,7 +95,8 @@ Outputs land in `.agentops/results/latest/`:
 - `results.json` — machine-readable (versioned, stable schema)
 - `report.md` — human-readable, PR-friendly
 
-To compare against a previous run, pass `--baseline`:
+After changing the agent version, prompt, model, or dataset, compare
+against a previous run with `--baseline`:
 
 ```powershell
 agentops eval run --baseline .agentops/results/baseline/results.json

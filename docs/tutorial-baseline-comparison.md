@@ -48,8 +48,11 @@ locally.
 
 ## 2. Make your change
 
-Edit your prompt, swap the model deployment, change a tool — anything
-you want to evaluate the impact of.
+Edit your prompt, publish and reference a new agent version, swap the
+model deployment, change a tool, or update the dataset — anything whose
+impact you want to evaluate. Do not expect an interesting comparison if
+you re-run the exact same agent and dataset; that should normally show
+unchanged quality metrics with only latency variance.
 
 ## 3. Re-run with `--baseline`
 

@@ -189,7 +189,7 @@ If most rows score 4–5, your agent is working well. If most score 1–2, check
 
 You've only run a single evaluation, so `.agentops/results/` has one timestamped run plus the `latest/` mirror. To compare a future run against it, you don't need to copy anything — just point `--baseline` at the previous result. AgentOps loads the baseline into memory before refreshing `latest/`, so `latest/results.json` works as a shorthand for "the run before this one".
 
-**1. Change something** — agent instructions, model deployment, an evaluator threshold, the dataset.
+**1. Change something meaningful** — publish a new Foundry agent version and update `agent: "name:version"`, change the agent instructions, swap the model deployment, or replace the dataset. Re-running the same agent against the same dataset usually produces an unchanged comparison except for latency variance.
 
 **2. Re-run with `--baseline`:**
 

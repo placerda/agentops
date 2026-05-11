@@ -128,14 +128,24 @@ your agent.
 
 The CLI prints `Threshold status: PASSED` (exit code `0`) or `FAILED` (exit code `2`) so you can wire it into CI directly.
 
-## 5. Compare against a baseline
+## 5. Compare against a baseline later
+
+Comparison is most useful after a meaningful change. If you immediately
+run the same agent, prompt, model, and dataset again, the report will
+mostly show "unchanged" metrics plus normal latency variance. Treat the
+first successful quickstart run as your baseline, then compare after you
+change something real, for example:
+
+- publish a new version of the Foundry agent and update `agent: "name:version"`
+- change the agent instructions or model deployment
+- replace the smoke dataset with domain-specific rows
 
 Each `agentops eval run` writes to a timestamped folder and refreshes
-`.agentops/results/latest/`. To diff a new run against the previous
-one, just point `--baseline` at it — no copy needed:
+`.agentops/results/latest/`. After making one of those changes, compare
+the new run against the previous one by pointing `--baseline` at `latest`:
 
 ```powershell
-# ... change your prompt, model, or dataset ...
+# After changing the agent version, prompt, model, or dataset:
 agentops eval run --baseline .agentops/results/latest/results.json
 ```
 
