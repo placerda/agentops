@@ -52,6 +52,7 @@ where = ["src"]
   ".gitignore",
   "project.gitignore",
   "workflows/*.yml",
+  "pipelines/azuredevops/*.yml",
   "skills/*/SKILL.md",
   "agent-server/*",
 ]

@@ -1,6 +1,6 @@
 ---
 name: agentops-workflow
-description: Set up the full GenAIOps GitFlow CI/CD scaffold for an AgentOps project. Generates four GitHub Actions workflows (PR gate + Deploy DEV / QA / PROD) wired to GitHub Environments, OIDC auth, and AgentOps eval gating. Trigger on "CI", "CD", "pipeline", "workflow", "GitHub Actions", "PR gate", "deploy", "environments", "GitFlow", "release branch", "promote to prod", "DevOps", "GenAIOps pipeline".
+description: Set up the full GenAIOps GitFlow CI/CD scaffold for an AgentOps project. Generates four CI/CD workflows (PR gate + Deploy DEV / QA / PROD) for either GitHub Actions or Azure DevOps Pipelines, wired to environment approvals, Azure auth, and AgentOps eval gating. Trigger on "CI", "CD", "pipeline", "workflow", "GitHub Actions", "Azure DevOps", "ADO", "PR gate", "deploy", "environments", "GitFlow", "release branch", "promote to prod", "DevOps", "GenAIOps pipeline".
 ---
 
 # AgentOps Workflow
@@ -9,22 +9,33 @@ Help the user wire AgentOps into a real GenAIOps GitFlow CI/CD setup with
 three environments (`dev`, `qa`, `production`) and an automatic eval gate
 on every change.
 
+**Pick the platform up front.** AgentOps supports two:
+
+- `--platform github` (default) — writes `.github/workflows/*.yml` using
+  GitHub Actions. Auth via OIDC + GitHub Environments.
+- `--platform azure-devops` — writes `.azuredevops/pipelines/*.yml` using
+  Azure DevOps Pipelines. Auth via a Service Connection + a variable
+  group named `agentops`.
+
+The conceptual workflows are identical: one PR gate plus three deploy
+stages (dev/qa/prod). Pick the platform that matches where the
+repository lives. If unclear, ask the user.
+
 For a new repository or tutorial, start with the PR gate only:
 `agentops workflow generate --kinds pr`. Generate DEV/QA/PROD deploy
-workflows only after GitHub Environments, Azure OIDC, and real
-build/deploy commands are configured. This avoids creating failing
-deploy Actions on the first push to `main`.
+workflows only after environments, Azure auth, and real build/deploy
+commands are configured.
 
 ## Branch model assumed
 
 ```
-feature/* ── PR ──▶ develop                 [agentops-pr.yml]      gate
+feature/* ── PR ──▶ develop                 [agentops-pr]          gate
                        │
-                       └── merge ─▶ develop  [agentops-deploy-dev.yml]   build + eval + deploy DEV
-release/* ── push                            [agentops-deploy-qa.yml]    build + eval + deploy QA
-release/* ── PR ──▶ main                     [agentops-pr.yml]      gate
+                       └── merge ─▶ develop  [agentops-deploy-dev]  build + eval + deploy DEV
+release/* ── push                            [agentops-deploy-qa]   build + eval + deploy QA
+release/* ── PR ──▶ main                     [agentops-pr]          gate
                        │
-                       └── merge ─▶ main     [agentops-deploy-prod.yml]  safety eval + build + deploy PROD
+                       └── merge ─▶ main     [agentops-deploy-prod] safety eval + build + deploy PROD
 ```
 
 If the user is on trunk-based development, omit `qa` and `release/**`
@@ -36,45 +47,47 @@ and have them generate `--kinds pr,dev,prod`.
 2. `agentops.yaml` exists at the project root and `agentops eval run`
    works locally.
 3. The user's repo follows GitFlow (or is willing to). If not, ask which
-   branches map to dev/qa/prod and adjust the `on:` triggers after
+   branches map to dev/qa/prod and adjust the triggers after
    generation.
 
 ## Step 1 — Generate the workflows
 
+**GitHub Actions (default):**
+
 ```bash
 agentops workflow generate --kinds pr
+# or full scaffold:
+agentops workflow generate --kinds pr,dev,qa,prod --force
 ```
 
-This writes the safe first workflow into `.github/workflows/`:
-
-| File | Trigger | Environment |
-|---|---|---|
-| `agentops-pr.yml` | PRs to `develop`, `release/**`, `main` plus manual dispatch | `dev` |
-
-After OIDC, environments, and real build/deploy commands are ready, expand
-to the full scaffold:
+**Azure DevOps Pipelines:**
 
 ```bash
-agentops workflow generate --kinds pr,dev,qa,prod --force
+agentops workflow generate --platform azure-devops --kinds pr
+# or full scaffold:
+agentops workflow generate --platform azure-devops --kinds pr,dev,qa,prod --force
 ```
 
 The full scaffold writes:
 
-| File | Trigger | Environment |
-|---|---|---|
-| `agentops-pr.yml` | PRs to `develop`, `release/**`, `main` | `dev` |
-| `agentops-deploy-dev.yml` | push to `develop` | `dev` |
-| `agentops-deploy-qa.yml` | push to `release/**` | `qa` |
-| `agentops-deploy-prod.yml` | push to `main` | `production` |
+| Kind | GitHub Actions path | Azure DevOps path | Trigger | Environment |
+|---|---|---|---|---|
+| `pr` | `.github/workflows/agentops-pr.yml` | `.azuredevops/pipelines/agentops-pr.yml` | PRs to `develop`, `release/**`, `main` | `dev` |
+| `dev` | `.github/workflows/agentops-deploy-dev.yml` | `.azuredevops/pipelines/agentops-deploy-dev.yml` | push to `develop` | `dev` |
+| `qa` | `.github/workflows/agentops-deploy-qa.yml` | `.azuredevops/pipelines/agentops-deploy-qa.yml` | push to `release/**` | `qa` |
+| `prod` | `.github/workflows/agentops-deploy-prod.yml` | `.azuredevops/pipelines/agentops-deploy-prod.yml` | push to `main` | `production` |
 
 Useful flags:
 
+- `--platform github | azure-devops` — pick the CI/CD platform.
 - `--force` — overwrite existing workflow files.
 - `--kinds pr,dev,qa,prod` — generate a subset. Prefer `--kinds pr`
   until deploy environments are configured.
 - `--dir <path>` — non-default repo root.
 
-## Step 2 — Configure GitHub Environments
+## Step 2 — Configure environments and Azure auth
+
+### GitHub Actions
 
 Walk the user through Settings → Environments and create three:
 
@@ -92,7 +105,30 @@ Walk the user through Settings → Environments and create three:
 Tell the user that env-specific variables on the `production` environment
 will override repo-level ones automatically inside the prod workflow.
 
-## Step 3 — Configure repository variables for OIDC
+### Azure DevOps
+
+In **Pipelines → Environments**, create three: `dev`, `qa`,
+`production`. On `production`, add a manual approval check (Approvals
+and checks → New check → Approvals).
+
+In **Pipelines → Library**, create a variable group named `agentops`
+with these variables (mark sensitive ones as secret if needed):
+
+- `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_DEPLOYMENT`
+
+In **Project settings → Service connections**, create an Azure Resource
+Manager service connection named `agentops-azure` scoped to the
+subscription that hosts your Foundry project.
+
+Grant the build service "Contribute to pull requests" permission on the
+repository (Project settings → Repositories → Security → `Build Service`)
+so the PR-comment step can post.
+
+## Step 3 — Configure Azure auth
+
+### GitHub Actions (OIDC)
 
 At repository level (Settings → Secrets and variables → Actions →
 **Variables** tab), set:
@@ -107,6 +143,12 @@ Then configure Workload Identity Federation on the Azure side
 (`federated-credentials` on the app registration) for **each branch /
 environment** the workflows will run from. See
 `docs/ci-github-actions.md` for the exact `az` commands.
+
+### Azure DevOps (Service Connection)
+
+Already done in Step 2 — the `agentops-azure` service connection
+handles auth. Make sure the underlying service principal or managed
+identity has the **Azure AI User** role on the Foundry account.
 
 ## Step 4 — Fill in the Build and Deploy placeholders
 
@@ -158,7 +200,7 @@ Common follow-ups:
 ## Guardrails
 
 - Do **not** invent CLI flags. The supported `workflow generate` flags
-  are `--force`, `--dir`, `--kinds`.
+  are `--force`, `--dir`, `--kinds`, `--platform`.
 - Do **not** push DEV/QA/PROD deploy workflows with placeholder
   Build/Deploy steps or missing OIDC variables; generate PR-only first.
 - Do **not** create parallel workflow files. Prefer editing the

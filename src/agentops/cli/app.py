@@ -444,24 +444,45 @@ def cmd_workflow_generate(
             "Default (empty) generates all four."
         ),
     ),
+    platform: str = typer.Option(
+        "github",
+        "--platform",
+        "-p",
+        help=(
+            "CI/CD platform. 'github' (default) writes "
+            "`.github/workflows/*.yml`; 'azure-devops' writes "
+            "`.azuredevops/pipelines/*.yml`."
+        ),
+    ),
 ) -> None:
-    """Generate the AgentOps GitFlow GitHub Actions workflows.
+    """Generate the AgentOps GitFlow CI/CD workflows.
 
     By default writes all four templates that map to a classic GitFlow
-    setup with three GitHub Environments (dev, qa, production):
+    setup with three deploy environments (dev, qa, production):
 
-      - agentops-pr.yml          (PR gate; PRs to develop, release/**, main)
-      - agentops-deploy-dev.yml  (push to develop  -> environment: dev)
-      - agentops-deploy-qa.yml   (push to release/** -> environment: qa)
-      - agentops-deploy-prod.yml (push to main      -> environment: production)
+      - agentops-pr           (PR gate; PRs to develop, release/**, main)
+      - agentops-deploy-dev   (push to develop  -> environment: dev)
+      - agentops-deploy-qa    (push to release/** -> environment: qa)
+      - agentops-deploy-prod  (push to main      -> environment: production)
 
-    Use --kinds to opt into a subset, e.g. --kinds pr,dev.
+    Use --kinds to opt into a subset (e.g. --kinds pr,dev), and
+    --platform to target either GitHub Actions or Azure DevOps Pipelines.
+    The conceptual workflows are identical across platforms.
     """
-    from agentops.services.cicd import ALL_KINDS, generate_cicd_workflows
+    from agentops.services.cicd import ALL_KINDS, PLATFORMS, generate_cicd_workflows
 
     log.debug(
-        "cmd_workflow_generate called force=%s dir=%s kinds=%r", force, directory, kinds
+        "cmd_workflow_generate called force=%s dir=%s kinds=%r platform=%s",
+        force, directory, kinds, platform,
     )
+
+    if platform not in PLATFORMS:
+        typer.echo(
+            f"Error: unknown --platform value {platform!r}. "
+            f"Valid: {', '.join(PLATFORMS)}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     selected: list[str] | None = None
     if kinds.strip():
@@ -477,12 +498,13 @@ def cmd_workflow_generate(
 
     try:
         result = generate_cicd_workflows(
-            directory=directory, force=force, kinds=selected
+            directory=directory, force=force, kinds=selected, platform=platform,
         )
     except Exception as exc:
         typer.echo(f"Error: failed to generate CI/CD workflows: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    typer.echo(f"Platform: {result.platform}")
     for created in result.created_files:
         typer.echo(f" + created {created}")
     for overwritten in result.overwritten_files:

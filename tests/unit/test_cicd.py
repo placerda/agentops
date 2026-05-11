@@ -274,3 +274,91 @@ def test_cli_next_steps_mention_environments(tmp_path: Path) -> None:
     assert "dev" in out and "qa" in out and "production" in out
     assert "OIDC" in out or "Workload Identity Federation" in out
     assert "branch" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Azure DevOps platform
+# ---------------------------------------------------------------------------
+
+
+_ADO_DIR = ".azuredevops/pipelines"
+_ADO_PR = f"{_ADO_DIR}/agentops-pr.yml"
+_ADO_DEV = f"{_ADO_DIR}/agentops-deploy-dev.yml"
+_ADO_QA = f"{_ADO_DIR}/agentops-deploy-qa.yml"
+_ADO_PROD = f"{_ADO_DIR}/agentops-deploy-prod.yml"
+_ADO_PATHS = (_ADO_PR, _ADO_DEV, _ADO_QA, _ADO_PROD)
+
+
+def test_azure_devops_platform_writes_pipelines(tmp_path: Path) -> None:
+    result = generate_cicd_workflows(directory=tmp_path, platform="azure-devops")
+
+    assert result.platform == "azure-devops"
+    for rel in _ADO_PATHS:
+        assert (tmp_path / rel).exists(), f"missing {rel}"
+    # GitHub workflows must NOT be created when ADO is selected.
+    for rel in ALL_PATHS:
+        assert not (tmp_path / rel).exists(), f"unexpected {rel}"
+
+
+def test_azure_devops_pr_template_uses_ado_idioms(tmp_path: Path) -> None:
+    generate_cicd_workflows(directory=tmp_path, platform="azure-devops", kinds=["pr"])
+    content = (tmp_path / _ADO_PR).read_text(encoding="utf-8")
+
+    # ADO-specific idioms.
+    assert "trigger: none" in content
+    assert "pr:" in content
+    assert "pool:" in content
+    assert "vmImage: ubuntu-latest" in content
+    assert "AzureCLI@2" in content
+    assert "UsePythonVersion@0" in content
+    # Variable group + service connection wiring.
+    assert "group: agentops" in content
+    assert "AZURE_SERVICE_CONNECTION" in content
+    # PR comment marker preserved across platforms.
+    assert "<!-- agentops-pr-report -->" in content
+
+
+def test_azure_devops_deploy_templates_use_deployment_job(tmp_path: Path) -> None:
+    generate_cicd_workflows(
+        directory=tmp_path, platform="azure-devops", kinds=["dev", "qa", "prod"]
+    )
+    for rel, env in ((_ADO_DEV, "dev"), (_ADO_QA, "qa"), (_ADO_PROD, "production")):
+        content = (tmp_path / rel).read_text(encoding="utf-8")
+        assert "deployment: agentops_eval_and_deploy" in content
+        assert f"TARGET_ENVIRONMENT\n    value: {env}" in content
+        assert "agentops eval run" in content
+
+
+def test_unknown_platform_raises(tmp_path: Path) -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown platform"):
+        generate_cicd_workflows(directory=tmp_path, platform="circleci")
+
+
+def test_cli_platform_azure_devops(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "workflow", "generate",
+            "--dir", str(tmp_path),
+            "--platform", "azure-devops",
+            "--kinds", "pr",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert (tmp_path / _ADO_PR).exists()
+    assert not (tmp_path / _PR_PATH).exists()
+    assert "azure-devops" in result.stdout
+
+
+def test_cli_platform_invalid_value_fails(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["workflow", "generate", "--dir", str(tmp_path), "--platform", "bitbucket"],
+    )
+
+    assert result.exit_code == 1
+    out = result.stdout.lower()
+    assert "unknown" in out and "platform" in out

@@ -219,6 +219,109 @@ For normal local iteration you can also use
 loads the baseline before refreshing `latest/`, so that path means "the
 run before this one".
 
+## 7. Run the AgentOps watchdog agent
+
+So far the loop is reactive: someone ran an eval and decided whether the
+delta was acceptable. The **watchdog agent** is the AgentOps service that
+turns the same run history into a written report — categorised findings,
+severity, suggested remediations — so you can see how the project is
+trending without opening every `results.json` by hand.
+
+You already have at least two runs in `.agentops/results/` (the baseline
+and the comparison). Point the watchdog at the workspace:
+
+```powershell
+agentops agent analyze --workspace . --out .agentops/agent/report.md
+```
+
+It reads every run under `.agentops/results/`, applies the rules defined
+in the workspace `agent.yaml` (regression detection, threshold drift,
+latency spikes, …) and emits a single Markdown report. Open it the same
+way as the eval report:
+
+```powershell
+code .agentops/agent/report.md
+```
+
+The CLI returns:
+
+- `0` — no findings at or above the `--severity-fail` threshold (default `critical`).
+- `2` — at least one finding at that severity (use this in CI to fail
+  noisily on regressions).
+- `1` — runtime/config error.
+
+The watchdog is the bridge between "one eval ran" and "the project's
+quality is healthy". Wire `agentops agent analyze` into the CI workflow
+generated below to get the same view automatically on every PR.
+
+## 8. Generate the CI/CD workflows
+
+The eval loop is most useful when it runs automatically on every pull
+request and deploy. `agentops workflow generate` writes a complete
+GitFlow scaffold — a PR gate plus three deploy stages
+(dev / qa / production) — that you can commit to your repo verbatim.
+
+You can target **GitHub Actions** (default) or **Azure DevOps
+Pipelines**. The conceptual workflows are identical across platforms;
+the only difference is the YAML dialect and where the files land.
+
+**GitHub Actions:**
+
+```powershell
+agentops workflow generate
+```
+
+writes:
+
+```
+.github/workflows/
+├── agentops-pr.yml            # PR gate (PRs to develop, release/**, main)
+├── agentops-deploy-dev.yml    # push to develop  → environment: dev
+├── agentops-deploy-qa.yml     # push to release/** → environment: qa
+└── agentops-deploy-prod.yml   # push to main      → environment: production
+```
+
+**Azure DevOps Pipelines:**
+
+```powershell
+agentops workflow generate --platform azure-devops
+```
+
+writes:
+
+```
+.azuredevops/pipelines/
+├── agentops-pr.yml
+├── agentops-deploy-dev.yml
+├── agentops-deploy-qa.yml
+└── agentops-deploy-prod.yml
+```
+
+Each workflow installs AgentOps, runs `agentops eval run`, uploads the
+results as a pipeline artifact, and (for the PR gate) posts the
+rendered `report.md` as an idempotent PR comment.
+
+For the quickstart you don't have to commit these files yet — opening
+them locally shows what AgentOps will run in CI:
+
+```powershell
+code .github/workflows/agentops-pr.yml          # GitHub
+code .azuredevops/pipelines/agentops-pr.yml     # Azure DevOps
+```
+
+Useful flags:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--platform` | `github` | `github` or `azure-devops`. |
+| `--kinds` | all four | Comma-separated subset, e.g. `--kinds pr,dev`. Use `--kinds pr` for the safest first commit. |
+| `--force` | off | Overwrite existing workflow files. |
+| `--dir` | `.` | Repo root directory. |
+
+The `agentops-workflow` Copilot skill walks you through the rest
+(environments, Azure auth, branch protection / approvals) when you're
+ready to push the workflows to your repo.
+
 ## Where evaluators come from
 
 You did not pick evaluators — AgentOps inferred them:
