@@ -46,10 +46,20 @@ def test_eval_help_does_not_expose_compare_subcommand() -> None:
 
 
 def test_planned_command_groups_removed() -> None:
-    """Stub command groups (monitor/model/dataset/config) are gone in 1.0."""
-    for group in ("monitor", "model", "dataset", "config"):
+    """Stub command groups (model/dataset/config) are gone in 1.0.
+
+    `monitor` is now a real command that opens the local dashboard."""
+    for group in ("model", "dataset", "config"):
         result = runner.invoke(app, [group, "--help"])
         assert result.exit_code != 0, f"unexpected: 'agentops {group}' is still wired"
+
+
+def test_monitor_command_wired() -> None:
+    """`agentops monitor` exposes the local dashboard server."""
+    result = runner.invoke(app, ["monitor", "--help"])
+    assert result.exit_code == 0
+    stripped = _strip_ansi(result.stdout)
+    assert "dashboard" in stripped.lower() or "monitor" in stripped.lower()
 
 
 def test_agent_command_group_wired() -> None:

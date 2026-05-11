@@ -765,7 +765,10 @@ def cmd_agent_analyze(
     from agentops.agent.analyzer import analyze
     from agentops.agent.config import load_agent_config
     from agentops.agent.findings import Severity
+    from agentops.agent.history import append_analysis, build_record
     from agentops.agent.report import render_report
+    from agentops.utils import telemetry
+    import time as _time
 
     workspace = workspace.resolve()
     resolved_config = _resolve_agent_config_path(workspace, config_path)
@@ -789,36 +792,87 @@ def cmd_agent_analyze(
         )
         raise typer.Exit(code=1) from exc
 
+    telemetry.init_tracing()
+    started_perf = _time.perf_counter()
     try:
-        result = analyze(
-            workspace,
-            config,
-            categories=(
-                [c for c in categories.split(",") if c.strip()]
-                if categories
-                else None
-            ),
-            exclude_rules=(
-                [r for r in exclude_rules.split(",") if r.strip()]
-                if exclude_rules
-                else None
-            ),
-        )
-    except Exception as exc:  # pragma: no cover
-        typer.echo(f"Error running analyzer: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+        with telemetry.agent_analyze_span(
+            workspace=str(workspace),
+            lookback_days=config.lookback_days,
+        ) as analyze_span:
+            try:
+                result = analyze(
+                    workspace,
+                    config,
+                    categories=(
+                        [c for c in categories.split(",") if c.strip()]
+                        if categories
+                        else None
+                    ),
+                    exclude_rules=(
+                        [r for r in exclude_rules.split(",") if r.strip()]
+                        if exclude_rules
+                        else None
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover
+                typer.echo(f"Error running analyzer: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+
+            duration_seconds = _time.perf_counter() - started_perf
+
+            # Persist the analysis history (always — works without Azure).
+            sources_enabled = _sources_enabled(config)
+            record = build_record(
+                result.findings,
+                sources_enabled=sources_enabled,
+                lookback_days=config.lookback_days,
+                duration_seconds=duration_seconds,
+            )
+            try:
+                history_file = append_analysis(workspace, record)
+            except OSError as exc:  # pragma: no cover - best effort
+                history_file = None
+                log.debug("could not append agent history: %s", exc)
+
+            telemetry.set_agent_analyze_result(
+                analyze_span,
+                findings_total=record.findings_total,
+                by_severity=record.findings_by_severity,
+                by_category=record.findings_by_category,
+                max_severity=record.max_severity,
+                sources_enabled=sources_enabled,
+            )
+    finally:
+        telemetry.shutdown()
 
     out_path = out if out.is_absolute() else workspace / out
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(render_report(result), encoding="utf-8")
 
     typer.echo(f"Wrote {out_path}")
+    if history_file is not None:
+        typer.echo(f"Appended history: {history_file}")
     typer.echo(f"Findings: {len(result.findings)}")
     if result.max_severity is not None:
         typer.echo(f"Max severity: {result.max_severity.value}")
 
     if result.max_severity is not None and result.max_severity >= severity_floor:
         raise typer.Exit(code=2)
+
+
+def _sources_enabled(config) -> list:
+    """Return the list of source names that were enabled in agent.yaml."""
+    enabled: list = []
+    sources = getattr(config, "sources", None)
+    if sources is None:
+        return enabled
+    for name in ("results_history", "azure_monitor", "foundry_control", "azure_resources"):
+        source = getattr(sources, name, None)
+        if source is None:
+            continue
+        if getattr(source, "enabled", True):
+            enabled.append(name)
+    return enabled
 
 
 @agent_app.command("serve")
@@ -894,6 +948,59 @@ def cmd_agent_serve(
         )
 
     uvicorn.run(fastapi_app, host=host, port=port, workers=workers)
+
+
+@app.command("monitor")
+def cmd_monitor(
+    host: Annotated[
+        str, typer.Option("--host", help="Bind host (default: 127.0.0.1).")
+    ] = "127.0.0.1",
+    port: Annotated[
+        int, typer.Option("--port", help="Bind port (default: 8090).")
+    ] = 8090,
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Project root containing `.agentops/agent/history.jsonl`.",
+        ),
+    ] = Path("."),
+) -> None:
+    """Open a local dashboard of the watchdog agent's analysis history.
+
+    Reads ``.agentops/agent/history.jsonl`` (populated by
+    ``agentops agent analyze``) and serves a FitBit-inspired dark
+    dashboard on http://127.0.0.1:8090. Read-only, single-page,
+    auto-refreshes every 15s. Requires the ``[agent]`` extra::
+
+        pip install agentops-toolkit[agent]
+
+    No Azure resource needed: history is local. When
+    ``APPLICATIONINSIGHTS_CONNECTION_STRING`` is set, ``agentops agent
+    analyze`` *also* emits OpenTelemetry traces alongside the local
+    file — useful when you want to keep a longer history off-box.
+    """
+    try:
+        import uvicorn
+    except ImportError as exc:
+        typer.echo(
+            "Error: monitor requires the [agent] extra. "
+            "Run `pip install agentops-toolkit[agent]`.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    from agentops.agent.dashboard import create_app as create_dashboard_app
+
+    workspace = workspace.resolve()
+    fastapi_app = create_dashboard_app(workspace=workspace)
+
+    typer.echo(f"AgentOps monitor → http://{host}:{port}")
+    typer.echo(f"workspace: {workspace}")
+    typer.echo("Run `agentops agent analyze` in another terminal to populate the dashboard.")
+
+    uvicorn.run(fastapi_app, host=host, port=port, log_level="warning")
 
 
 def main() -> None:

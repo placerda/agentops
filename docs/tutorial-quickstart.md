@@ -254,6 +254,14 @@ The watchdog is the bridge between "one eval ran" and "the project's
 quality is healthy". Wire `agentops agent analyze` into the CI workflow
 generated below to get the same view automatically on every PR.
 
+> **Tip — local dashboard.** Every analyze run also appends a record to
+> `.agentops/agent/history.jsonl`. Run `agentops monitor` (in a separate
+> terminal) to open a FitBit-inspired dashboard at
+> http://127.0.0.1:8090 that shows the counts and sparklines without
+> opening every report.md by hand. The dashboard is read-only and
+> requires no Azure resource. When `APPLICATIONINSIGHTS_CONNECTION_STRING`
+> is set, the same analyses are also emitted as OpenTelemetry traces.
+
 ## 8. Generate the CI/CD workflows
 
 The eval loop is most useful when it runs automatically on every pull

@@ -332,3 +332,76 @@ def record_evaluator_span(
             span.set_attribute("agentops.eval.evaluator.criteria", criteria)
         if passed is not None:
             span.set_attribute("agentops.eval.evaluator.passed", passed)
+
+
+# ---------------------------------------------------------------------------
+# Watchdog agent spans
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def agent_analyze_span(
+    *,
+    workspace: str,
+    lookback_days: Optional[int] = None,
+) -> Generator[Optional[Any], None, None]:
+    """Root span for a watchdog ``agentops agent analyze`` run.
+
+    Mirrors :func:`eval_run_span` for the watchdog: when telemetry is
+    enabled (``APPLICATIONINSIGHTS_CONNECTION_STRING`` or
+    ``AGENTOPS_OTLP_ENDPOINT`` set) the span carries source-collection
+    and finding-distribution attributes so analyses are queryable
+    alongside the evaluation runs they observe.
+    """
+    if not _tracing_enabled or _tracer is None:
+        yield None
+        return
+
+    from opentelemetry.trace import SpanKind, StatusCode
+
+    with _tracer.start_as_current_span(
+        "ANALYZE watchdog",
+        kind=SpanKind.SERVER,
+    ) as span:
+        span.set_attribute("cicd.pipeline.name", "agentops.agent.analyze")
+        span.set_attribute("cicd.pipeline.action.name", "ANALYZE")
+        span.set_attribute("agentops.agent.workspace", workspace)
+        if lookback_days is not None:
+            span.set_attribute("agentops.agent.lookback_days", lookback_days)
+
+        try:
+            yield span
+        except Exception as exc:
+            span.set_status(StatusCode.ERROR, str(exc))
+            span.record_exception(exc)
+            raise
+
+
+def set_agent_analyze_result(
+    span: Any,
+    *,
+    findings_total: int,
+    by_severity: dict,
+    by_category: dict,
+    max_severity: Optional[str],
+    sources_enabled: list,
+) -> None:
+    """Set final attributes on a watchdog analyze span."""
+    if span is None:
+        return
+
+    from opentelemetry.trace import StatusCode
+
+    span.set_attribute("agentops.agent.findings_total", findings_total)
+    for severity, count in by_severity.items():
+        span.set_attribute(f"agentops.agent.findings.severity.{severity}", count)
+    for category, count in by_category.items():
+        span.set_attribute(f"agentops.agent.findings.category.{category}", count)
+    if max_severity is not None:
+        span.set_attribute("agentops.agent.max_severity", max_severity)
+    span.set_attribute(
+        "agentops.agent.sources_enabled", ",".join(sorted(sources_enabled))
+    )
+    # The watchdog itself completes successfully even when findings exist —
+    # finding severity is observability, not pipeline failure.
+    span.set_status(StatusCode.OK)

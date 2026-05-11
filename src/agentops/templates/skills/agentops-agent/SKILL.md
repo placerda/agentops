@@ -70,6 +70,27 @@ verbatim — for example, if the finding says "compare the latest run
 against the baseline runs in `.agentops/results/`", actually open
 those folders.
 
+## Local dashboard (`agentops monitor`)
+
+For a continuous view (not just a Markdown report) the user can open a
+local dashboard:
+
+```bash
+pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@develop"
+agentops monitor
+# → http://127.0.0.1:8090
+```
+
+The dashboard reads `.agentops/agent/history.jsonl` — a JSON-lines file
+the analyzer appends to on every run — and renders the latest counts,
+per-category cards, and sparklines of the last 12 analyses. No Azure
+resource needed; it's read-only and bound to localhost.
+
+When telemetry is enabled (`APPLICATIONINSIGHTS_CONNECTION_STRING` or
+`AGENTOPS_OTLP_ENDPOINT`), the analyzer **also** emits OpenTelemetry
+spans (`ANALYZE watchdog`) with per-severity / per-category counters,
+useful for long-term retention in App Insights or any OTel backend.
+
 ## Copilot Extension server
 
 If the user wants the watchdog inside Copilot Chat, they can:
@@ -94,6 +115,7 @@ Extension on Azure Container Apps.
 - Do **not** invent CLI flags. The contract is exactly:
   - `agentops agent analyze [--workspace] [--config] [--out] [--lookback-days] [--severity-fail]`
   - `agentops agent serve [--host] [--port] [--config] [--no-verify] [--workers]`
+  - `agentops monitor [--host] [--port] [--workspace]`
 - If a source is `skipped` or `error`, surface that as the *first*
   thing in the user-facing summary so they know the analyzer ran with
   partial data.
