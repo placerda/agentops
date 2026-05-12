@@ -76,6 +76,16 @@ After saving, you need the agent's identifier for the run config. There are two 
 
 AgentOps handles both. Named agents use the Foundry Responses API; legacy agents use the Threads API.
 
+### 4) Connect Application Insights (recommended)
+
+Wire an App Insights resource to the project so the agent's traces flow into Azure Monitor and the AgentOps dashboard's live telemetry section lights up.
+
+1. Open the agent, click the **Traces** tab.
+2. On the *Create or connect an App Insights resource* banner, click **Connect**.
+3. Pick an existing Application Insights resource (or create a new one), then **Connect**.
+
+Alternatively wire it at project scope: project name dropdown (top-left) → **Project details** → **Connected resources** → **Add connection** → **Application Insights**. Both paths write the same project-level setting. See [Set up tracing in Microsoft Foundry](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup).
+
 ## Part 2: Set up AgentOps
 
 ### 1) Install and sign in

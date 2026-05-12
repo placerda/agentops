@@ -170,6 +170,16 @@ into `agentops.yaml` next. The script:
 > prompt from `INSTRUCTIONS_GOOD` in the script, save, and copy the
 > resulting `name:version` string.
 
+### Connect Application Insights for tracing
+
+Wire an App Insights resource to the project once so the agent's traces
+flow into Azure Monitor and AgentOps dashboard's live telemetry section
+lights up. In Foundry: open the agent → **Traces** tab → **Connect** →
+pick or create an Application Insights resource. Or at project scope:
+project name dropdown → **Project details** → **Connected resources** →
+**Add connection** → **Application Insights**. Docs:
+[Set up tracing in Microsoft Foundry](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup).
+
 ## 3. Initialize the workspace
 
 In an empty folder (or the GitHub repo you want to use):

@@ -32,7 +32,7 @@ The former bundle-based, multi-file workspace has been replaced by this flat `ag
 
 - Python 3.11 or later.
 - Permission to create or edit a **Foundry prompt agent** and publish a
-  version identified by `name:version` (for example `agentops-smoke:1`).
+  version identified by `name:version` (for example `quickstart-agent:1`).
 - The Foundry project endpoint URL.
 - For AI-assisted evaluators (Coherence, Groundedness, etc.): an Azure OpenAI endpoint and deployment to use as the judge model.
 - `az login` working against the tenant that owns the Foundry project
@@ -67,7 +67,7 @@ This creates two files:
 
 ## 3. Create the smoke-test Foundry agent
 
-In Azure AI Foundry, create a prompt agent named `agentops-smoke` with
+In Azure AI Foundry, create a prompt agent named `quickstart-agent` with
 your preferred model deployment. Paste this exact instruction into the
 agent's **Instructions** field, then save and publish it:
 
@@ -84,13 +84,37 @@ For every user message:
 ```
 
 Copy the published `name:version` value from Foundry, for example
-`agentops-smoke:2`. Foundry's portal saves the first published version
+`quickstart-agent:2`. Foundry's portal saves the first published version
 as **v2** (v1 is reserved for the empty draft), so your baseline will
 normally be `:2`, not `:1`. This prompt is intentionally strict because
 the seed dataset checks whether the agent can follow exact-output
 instructions.
 
-## 4. Configure AgentOps
+## 4. Connect Application Insights for tracing
+
+AgentOps reads live production telemetry (invocations, error rate, P95
+latency, tokens) from the Application Insights resource your Foundry
+project is wired to. Wire it once and the dashboard, watchdog, and
+report tooling all pick it up automatically.
+
+In the Foundry portal:
+
+1. Open the `quickstart-agent` agent.
+2. Click the **Traces** tab.
+3. Click **Connect** on the banner *Create or connect an App Insights
+   resource to enable tracing*.
+4. Pick an existing Application Insights resource (or create a new one),
+   then **Connect**.
+
+You can also wire it at project scope from the project name dropdown
+(top-left) → **Project details** → **Connected resources** → **Add
+connection** → **Application Insights**. Both paths write the same
+project-level setting, so you only need to do it once.
+
+After this step the `agentops dashboard` Telemetry card flips to
+**App Insights** without any environment variable on your side.
+
+## 5. Configure AgentOps
 
 Open `agentops.yaml` and set `agent:` to your Foundry prompt agent using
 the `name:version` format. Use the agent name plus the published version
@@ -102,7 +126,7 @@ The full minimal config is just:
 
 ```yaml
 version: 1                       # schema version of agentops.yaml itself
-agent: "agentops-smoke:2"        # ':2' is the Foundry agent version
+agent: "quickstart-agent:2"        # ':2' is the Foundry agent version
 dataset: .agentops/data/smoke.jsonl
 execution: cloud                 # Foundry runs the agent + evaluators server-side
 ```
@@ -129,7 +153,7 @@ published version — they are independent.
 > tutorials; this quickstart keeps the path focused on a Foundry prompt
 > agent.
 
-## 5. Run the baseline evaluation
+## 6. Run the baseline evaluation
 
 Set credentials and run. For Foundry targets, provide the project endpoint either in `agentops.yaml` as `project_endpoint:` or in `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`; if both are set, `agentops.yaml` wins for target invocation and publishing.
 
@@ -178,7 +202,7 @@ The seed dataset asks the target to answer with exact short factual
 sentences. The prompt from step 3 is designed to pass this smoke test, so
 this first successful run is your baseline.
 
-**Capture the baseline now** — the comparison run in step 6 requires
+**Capture the baseline now** — the comparison run in step 7 requires
 this file to exist:
 
 ```powershell
@@ -188,7 +212,7 @@ Copy-Item .agentops\results\latest\results.json .agentops\baseline\results.json
 
 The CLI prints `Threshold status: PASSED` (exit code `0`) or `FAILED` (exit code `2`) so you can wire it into CI directly.
 
-## 6. Change the prompt and compare against the baseline
+## 7. Change the prompt and compare against the baseline
 
 Before running the comparison, make a real prompt change so the report
 has something visible to measure. In Foundry, replace the agent
@@ -210,7 +234,7 @@ after your baseline — typically `:3`):
 
 ```yaml
 version: 1
-agent: "agentops-smoke:3"
+agent: "quickstart-agent:3"
 dataset: .agentops/data/smoke.jsonl
 execution: cloud
 ```
@@ -233,7 +257,7 @@ For normal local iteration you can also use
 loads the baseline before refreshing `latest/`, so that path means "the
 run before this one".
 
-## 7. Run the AgentOps watchdog agent
+## 8. Run the AgentOps watchdog agent
 
 So far the loop is reactive: someone ran an eval and decided whether the
 delta was acceptable. The **watchdog agent** is the AgentOps service that
@@ -368,7 +392,7 @@ Then re-run `agentops agent analyze`. Posture findings appear under the
 dashboard's *Security* card lights up if anything regressed since the
 last analysis.
 
-## 8. Generate the CI/CD workflows
+## 9. Generate the CI/CD workflows
 
 The eval loop is most useful when it runs automatically on every pull
 request and deploy. `agentops workflow generate` writes a complete
