@@ -1,4 +1,4 @@
-"""Production telemetry queries for the local AgentOps monitor dashboard.
+"""Production telemetry queries for the local AgentOps dashboard.
 
 Pulls live signals (invocation count, error rate, p95 latency, token
 spend) from the Application Insights resource that the Foundry project

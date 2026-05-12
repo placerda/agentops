@@ -1,11 +1,10 @@
 """Local web dashboard for the AgentOps watchdog agent.
 
-``agentops monitor`` boots a tiny FastAPI server that reads the
+``agentops dashboard`` boots a tiny FastAPI server that reads the
 analysis history from ``.agentops/agent/history.jsonl`` **and** the
 evaluation history from ``.agentops/results/*/results.json``, then
-serves a single dashboard page in a FitBit-inspired dark theme. No
-external frontend dependencies (sparklines are inline SVG); no Azure
-resource required.
+serves a single dashboard page in a dark theme. No external frontend
+dependencies (sparklines are inline SVG); no Azure resource required.
 
 The server is intentionally read-only and bound to ``127.0.0.1`` by
 default — it is a developer-tool surface, not a production service.
@@ -856,9 +855,10 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>AgentOps Monitor</title>
+<title>AgentOps Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="refresh" content="15" />
+<link rel="icon" type="image/png" href="{icon_uri}" />
 <style>
   :root {{
     --bg: #08090b;
@@ -1047,7 +1047,7 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
   <div class="brand">
     <img src="{icon_uri}" alt="AgentOps" />
     <div>
-      <h1>AgentOps monitor</h1>
+      <h1>AgentOps dashboard</h1>
       <div class="subtitle" title="{workspace}">{workspace_display}</div>
     </div>
   </div>
@@ -1062,7 +1062,7 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
 {metrics_section}
 {watchdog_section}
 
-<footer>Auto-refreshes every 15s · <code>agentops monitor</code></footer>
+<footer>Auto-refreshes every 15s · <code>agentops dashboard</code></footer>
 
 <script>
 // Interactive sparkline hover: highlight the hovered point and swap the
@@ -1111,16 +1111,25 @@ def create_app(workspace: Path):
         from fastapi.responses import HTMLResponse, JSONResponse
     except ImportError as exc:  # pragma: no cover
         raise ImportError(
-            "agentops monitor requires the [agent] extra. "
+            "agentops dashboard requires the [agent] extra. "
             "Install with: pip install 'agentops-toolkit[agent]'"
         ) from exc
 
-    app = FastAPI(title="AgentOps Monitor", docs_url=None, redoc_url=None)
+    app = FastAPI(title="AgentOps Dashboard", docs_url=None, redoc_url=None)
 
     @app.get("/", response_class=HTMLResponse)
     def _index() -> HTMLResponse:
         payload = build_dashboard_payload(workspace)
         return HTMLResponse(render_dashboard_html(payload))
+
+    @app.get("/favicon.ico")
+    def _favicon():
+        from fastapi.responses import Response
+        try:
+            data = _pkg_files("agentops.templates").joinpath("icon.png").read_bytes()
+        except Exception:  # noqa: BLE001
+            return Response(status_code=404)
+        return Response(content=data, media_type="image/png")
 
     @app.get("/api/history")
     def _api_history(limit: Optional[int] = None) -> JSONResponse:

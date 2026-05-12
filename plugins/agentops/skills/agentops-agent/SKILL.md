@@ -70,14 +70,14 @@ verbatim — for example, if the finding says "compare the latest run
 against the baseline runs in `.agentops/results/`", actually open
 those folders.
 
-## Local dashboard (`agentops monitor`)
+## Local dashboard (`agentops dashboard`)
 
 For a continuous view (not just a Markdown report) the user can open a
 local dashboard:
 
 ```bash
 pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@develop"
-agentops monitor
+agentops dashboard
 # → http://127.0.0.1:8090
 ```
 
@@ -124,7 +124,7 @@ Extension on Azure Container Apps.
 - Do **not** invent CLI flags. The contract is exactly:
   - `agentops agent analyze [--workspace] [--config] [--out] [--lookback-days] [--severity-fail]`
   - `agentops agent serve [--host] [--port] [--config] [--no-verify] [--workers]`
-  - `agentops monitor [--host] [--port] [--workspace]`
+  - `agentops dashboard [--host] [--port] [--workspace]`
 - If a source is `skipped` or `error`, surface that as the *first*
   thing in the user-facing summary so they know the analyzer ran with
   partial data.

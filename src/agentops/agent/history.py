@@ -2,7 +2,7 @@
 
 Each ``agentops agent analyze`` invocation appends one JSON record to
 ``.agentops/agent/history.jsonl``. The file is the canonical local
-storage for the dashboard (``agentops monitor``) and for any future
+storage for the dashboard (``agentops dashboard``) and for any future
 trend-based checks. No Azure resource required.
 
 When OpenTelemetry tracing is configured, the same record is also

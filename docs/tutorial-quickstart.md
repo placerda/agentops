@@ -255,7 +255,7 @@ quality is healthy". Wire `agentops agent analyze` into the CI workflow
 generated below to get the same view automatically on every PR.
 
 > **Tip — local dashboard.** Every analyze run also appends a record to
-> `.agentops/agent/history.jsonl`. Run `agentops monitor` (in a separate
+> `.agentops/agent/history.jsonl`. Run `agentops dashboard` (in a separate
 > terminal) to open a dashboard at http://127.0.0.1:8090 that shows the
 > counts and sparklines without opening every report.md by hand. The
 > dashboard is read-only and requires no Azure resource.
@@ -265,7 +265,7 @@ generated below to get the same view automatically on every PR.
 Whenever `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT` is set (it already is, for
 cloud execution), AgentOps **auto-discovers** the Application Insights
 resource attached to the Foundry project and emits OpenTelemetry traces
-there — no extra environment variable required. The `agentops monitor`
+there — no extra environment variable required. The `agentops dashboard`
 dashboard's *Telemetry* card surfaces "App Insights (auto-discovered)"
 plus a one-click link to the Logs blade.
 
@@ -328,7 +328,7 @@ the updated history. Trend data persists across runners.
 **(b) Local Task Scheduler / cron (single developer machine):** drop
 into Windows Task Scheduler or a Linux `crontab -e` and add
 `agentops agent analyze --workspace <path>` on the cadence you want
-(hourly, daily). Combine with `agentops monitor` left running and the
+(hourly, daily). Combine with `agentops dashboard` left running and the
 dashboard refreshes itself.
 
 ### Security posture (WAF AI Security pillar)

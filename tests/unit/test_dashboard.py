@@ -213,7 +213,7 @@ def test_create_app_serves_dashboard(tmp_path: Path):
     r = client.get("/")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
-    assert "AgentOps monitor" in r.text
+    assert "AgentOps dashboard" in r.text
 
     r = client.get("/healthz")
     assert r.status_code == 200

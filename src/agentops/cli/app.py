@@ -950,8 +950,8 @@ def cmd_agent_serve(
     uvicorn.run(fastapi_app, host=host, port=port, workers=workers)
 
 
-@app.command("monitor")
-def cmd_monitor(
+@app.command("dashboard")
+def cmd_dashboard(
     host: Annotated[
         str, typer.Option("--host", help="Bind host (default: 127.0.0.1).")
     ] = "127.0.0.1",
@@ -967,25 +967,27 @@ def cmd_monitor(
         ),
     ] = Path("."),
 ) -> None:
-    """Open a local dashboard of the watchdog agent's analysis history.
+    """Open the local AgentOps dashboard.
 
-    Reads ``.agentops/agent/history.jsonl`` (populated by
-    ``agentops agent analyze``) and serves a FitBit-inspired dark
+    Reads ``.agentops/results/*/results.json`` and
+    ``.agentops/agent/history.jsonl`` (populated by ``agentops eval run``
+    and ``agentops agent analyze``) and serves an interactive dark
     dashboard on http://127.0.0.1:8090. Read-only, single-page,
     auto-refreshes every 15s. Requires the ``[agent]`` extra::
 
         pip install agentops-toolkit[agent]
 
-    No Azure resource needed: history is local. When
-    ``APPLICATIONINSIGHTS_CONNECTION_STRING`` is set, ``agentops agent
-    analyze`` *also* emits OpenTelemetry traces alongside the local
-    file — useful when you want to keep a longer history off-box.
+    No Azure resource needed for the local view. When
+    ``AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`` is set, the dashboard also
+    pulls live data (invocations, error rate, p95 latency, token spend)
+    from the Application Insights workspace attached to the Foundry
+    project — auto-discovered, no extra configuration required.
     """
     try:
         import uvicorn
     except ImportError as exc:
         typer.echo(
-            "Error: monitor requires the [agent] extra. "
+            "Error: dashboard requires the [agent] extra. "
             "Run `pip install agentops-toolkit[agent]`.",
             err=True,
         )
@@ -996,9 +998,9 @@ def cmd_monitor(
     workspace = workspace.resolve()
     fastapi_app = create_dashboard_app(workspace=workspace)
 
-    typer.echo(f"AgentOps monitor → http://{host}:{port}")
+    typer.echo(f"AgentOps dashboard → http://{host}:{port}")
     typer.echo(f"workspace: {workspace}")
-    typer.echo("Run `agentops agent analyze` in another terminal to populate the dashboard.")
+    typer.echo("Run `agentops agent analyze` in another terminal to populate watchdog findings.")
 
     uvicorn.run(fastapi_app, host=host, port=port, log_level="warning")
 
