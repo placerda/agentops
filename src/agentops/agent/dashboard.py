@@ -191,13 +191,16 @@ def _build_eval_section(eval_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
         },
         {
             "key": "items",
-            "label": "Items / run",
+            "label": "Dataset rows",
             "value": int(items_total_series[-1]) if items_total_series else 0,
-            "unit": "rows",
+            "unit": "evaluated",
             "series": items_total_series,
-            "labels": [_label_for_run(r) for r in eval_runs],
-            "badge": {"label": "latest", "tone": "muted"},
-            "source": "results.json · summary.items_total",
+            "labels": [
+                f"{_label_for_run(r)} · {int(r.get('items_total') or 0)} row(s)"
+                for r in eval_runs
+            ],
+            "badge": {"label": "in latest run", "tone": "muted"},
+            "source": "results.json · summary.items_total (rows in the dataset that AgentOps actually evaluated)",
         },
         {
             "key": "latest_run",
