@@ -20,6 +20,7 @@ def render(result: RunResult) -> str:
     lines.append("")
     overall = "✅ PASS" if result.summary.overall_passed else "❌ FAIL"
     lines.append(f"**Result:** {overall}")
+    lines.append("")
     lines.append(f"- **Target:** `{result.target.raw}` ({result.target.kind})")
     if result.target.protocol:
         lines.append(f"- **Protocol:** {result.target.protocol}")
