@@ -16,6 +16,8 @@ import base64
 import json
 import os
 import re
+import shutil
+import subprocess
 from importlib.resources import files as _pkg_files
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -62,7 +64,14 @@ def build_dashboard_payload(
     history: Optional[List[AnalysisRecord]] = None,
     time_range: Optional[TimeRange] = None,
 ) -> Dict[str, Any]:
-    """Reduce raw history + eval runs into a dashboard-ready dict."""
+    """Reduce raw history + eval runs into a dashboard-ready dict.
+
+    Note: the production section is **not** fetched here. It is rendered
+    as a placeholder in the initial HTML and filled in asynchronously by
+    the browser hitting ``/api/production/html``. This keeps the initial
+    page load fast (local file reads only) even when App Insights is
+    slow to authenticate or query.
+    """
     if time_range is None:
         time_range = parse_time_range()
     all_records = history if history is not None else load_analysis_history(workspace)
@@ -70,10 +79,14 @@ def build_dashboard_payload(
     eval_runs_all = _load_eval_runs(workspace, limit=200)
     eval_runs = _filter_eval_runs(eval_runs_all, time_range)
     telemetry = _telemetry_status()
-    production = _build_production_section(telemetry, time_range=time_range)
+    # Production is deferred to /api/production/html; render a placeholder.
+    production = {"has_data": False, "deferred": telemetry.get("enabled", False), "cards": []}
 
     return {
         "workspace": str(workspace.resolve()),
+        "foundry_project_url": _resolve_foundry_project_url(workspace),
+        "foundry_setup_url": _foundry_setup_url(),
+        "az_tenant_id": _az_tenant_id(),
         "time_range": {
             "key": time_range.key,
             "label": time_range.label,
@@ -151,7 +164,18 @@ def _build_production_section(
     )
     app_id = extract_application_id(conn)
     hours = time_range.hours if time_range is not None else 24
-    return collect_production_metrics(app_id, lookback_hours=hours)
+    section = collect_production_metrics(app_id, lookback_hours=hours)
+
+    # Attach a portal deep-link to every point so clicking jumps to App
+    # Insights. Foundry has no per-bucket view, so portal_url is the most
+    # useful destination available today.
+    portal_url = telemetry.get("portal_url") if isinstance(telemetry, dict) else None
+    if portal_url:
+        for card in section.get("cards") or []:
+            n = len(card.get("series") or [])
+            if n:
+                card["links"] = [portal_url] * n
+    return section
 
 
 def _build_eval_section(eval_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -164,6 +188,13 @@ def _build_eval_section(eval_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
     pass_rate = sum(pass_series) / len(pass_series) if pass_series else 0.0
     latest = eval_runs[-1]
     items_total_series = [float(r.get("items_total") or 0) for r in eval_runs]
+    run_links = [r.get("report_link") for r in eval_runs]
+    run_alt_links = [r.get("alt_link") for r in eval_runs]
+    run_alt_labels = [r.get("alt_label") for r in eval_runs]
+
+    # Latest execution is surfaced once at the section header, not on every card.
+    latest_execution = latest.get("execution")
+    cloud_suffix = ""
 
     cards: List[Dict[str, Any]] = [
         {
@@ -173,8 +204,20 @@ def _build_eval_section(eval_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "unit": "total",
             "series": [1.0] * len(eval_runs),  # constant — show as filled bar
             "labels": [_label_for_run(r) for r in eval_runs],
+            "links": run_links,
+            "alt_links": run_alt_links,
+            "alt_labels": run_alt_labels,
             "badge": {"label": _badge_runs(len(eval_runs)), "tone": "info"},
-            "source": ".agentops/results/",
+            "help": (
+                "Total agentops eval run invocations recorded under "
+                ".agentops/results/. The trend line marks each run, "
+                "oldest on the left."
+                "\n\nBadge tiers:"
+                "\n• under 3 runs — low sample"
+                "\n• 3 to 9 — moderate sample"
+                "\n• 10 or more — well sampled"
+            ),
+            "source": f".agentops/results/{cloud_suffix}",
         },
         {
             "key": "pass_rate",
@@ -184,10 +227,22 @@ def _build_eval_section(eval_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "series": pass_series,
             "labels": [
                 f"{_label_for_run(r)} · {'PASS' if r['passed'] else 'FAIL'}"
+                f" · {r.get('execution') or 'local'}"
                 for r in eval_runs
             ],
+            "links": run_links,
+            "alt_links": run_alt_links,
+            "alt_labels": run_alt_labels,
             "badge": _badge_pass_rate(pass_rate),
-            "source": "results.json · summary.overall_passed",
+            "help": (
+                "Share of recorded runs whose summary.overall_passed is "
+                "true. Hover the sparkline to see each run."
+                "\n\nBadge tiers:"
+                "\n• 90% or above — healthy"
+                "\n• 70 to 89% — mixed"
+                "\n• below 70% — unhealthy"
+            ),
+            "source": f"results.json · summary.overall_passed{cloud_suffix}",
         },
         {
             "key": "items",
@@ -197,10 +252,19 @@ def _build_eval_section(eval_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "series": items_total_series,
             "labels": [
                 f"{_label_for_run(r)} · {int(r.get('items_total') or 0)} row(s)"
+                f" · {r.get('execution') or 'local'}"
                 for r in eval_runs
             ],
+            "links": run_links,
+            "alt_links": run_alt_links,
+            "alt_labels": run_alt_labels,
             "badge": {"label": "in latest run", "tone": "muted"},
-            "source": "results.json · summary.items_total (rows in the dataset that AgentOps actually evaluated)",
+            "help": (
+                "Number of dataset rows that AgentOps actually evaluated "
+                "in the latest run. The dataset on disk may contain more "
+                "rows that were skipped due to filters or errors."
+            ),
+            "source": f"results.json · summary.items_total{cloud_suffix}",
         },
         {
             "key": "latest_run",
@@ -211,21 +275,34 @@ def _build_eval_section(eval_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "series": pass_series[-6:],
             "labels": [
                 f"{_label_for_run(r)} · {r.get('target') or '—'}"
+                f" · {r.get('execution') or 'local'}"
                 for r in eval_runs[-6:]
             ],
+            "links": run_links[-6:],
+            "alt_links": run_alt_links[-6:],
+            "alt_labels": run_alt_labels[-6:],
             "badge": {
                 "label": "passed" if latest["passed"] else "failed",
                 "tone": "ok" if latest["passed"] else "crit",
             },
+            "help": (
+                "Agent or model identifier from the most recent run. The "
+                "badge shows whether that run met every configured "
+                "threshold (passed or failed)."
+            ),
             "meta": [
-                latest["timestamp"] or "",
+                _format_iso_timestamp(latest["timestamp"]),
                 f"duration: {latest['duration']:.1f}s" if latest["duration"] else "duration: —",
                 f"execution: {latest['execution']}" if latest["execution"] else "execution: —",
             ],
             "source": "results.json · target.raw",
         },
     ]
-    return {"has_runs": True, "cards": cards}
+    return {
+        "has_runs": True,
+        "cards": cards,
+        "latest_execution": latest_execution,
+    }
 
 
 def _label_for_run(run: Dict[str, Any]) -> str:
@@ -254,6 +331,9 @@ def _build_metrics_cards(eval_runs: List[Dict[str, Any]]) -> List[Dict[str, Any]
             f"{_label_for_run(r)} · {float(v):.2f}"
             for r, v in paired
         ]
+        links = [r.get("report_link") for r, _v in paired]
+        alt_links = [r.get("alt_link") for r, _v in paired]
+        alt_labels = [r.get("alt_label") for r, _v in paired]
         latest = series[-1]
         is_latency = key == "avg_latency_seconds"
         badge = _metric_trend_badge(series, is_latency=is_latency)
@@ -264,7 +344,16 @@ def _build_metrics_cards(eval_runs: List[Dict[str, Any]]) -> List[Dict[str, Any]
             "unit": unit,
             "series": series,
             "labels": labels,
+            "links": links,
+            "alt_links": alt_links,
+            "alt_labels": alt_labels,
             "badge": badge,
+            "help": (
+                f"Average {label.lower()} across rows in the most recent "
+                "run. The trend line shows the metric across recorded "
+                "runs. Badge compares the latest run to the previous one: "
+                "improved, regressed, stable, or baseline."
+            ),
             "source": f"results.json · aggregate_metrics.{key}",
         })
     return cards
@@ -296,6 +385,12 @@ def _build_watchdog_section(records: List[AnalysisRecord]) -> Dict[str, Any]:
             "series": series,
             "labels": labels,
             "badge": _category_badge(key, current, records),
+            "help": (
+                f"Findings in the {label.lower()} category across all "
+                "recorded analyses. The trend line shows how this count "
+                "has moved over time. Badge reflects whether the latest "
+                "value is an improvement or a regression."
+            ),
             "source": f"history.jsonl · findings_by_category.{key}",
         })
 
@@ -316,6 +411,11 @@ def _build_watchdog_section(records: List[AnalysisRecord]) -> Dict[str, Any]:
                     for r in records
                 ],
                 "badge": _headline_badge_total(findings_series),
+                "help": (
+                    "Total findings produced by the watchdog agent across "
+                    "all recorded analyses. The badge compares the latest "
+                    "run to the previous one."
+                ),
                 "source": "history.jsonl · findings_total",
             },
             {
@@ -329,6 +429,11 @@ def _build_watchdog_section(records: List[AnalysisRecord]) -> Dict[str, Any]:
                     for r in records
                 ],
                 "badge": _headline_badge_critical(critical_series),
+                "help": (
+                    "Findings tagged as critical severity in the latest "
+                    "analysis. Treat any non-zero value as a fail-the-CI "
+                    "candidate."
+                ),
                 "source": "history.jsonl · findings_by_severity.critical",
             },
             {
@@ -340,6 +445,11 @@ def _build_watchdog_section(records: List[AnalysisRecord]) -> Dict[str, Any]:
                 "series": findings_series[-6:],
                 "labels": record_labels[-6:],
                 "badge": latest_badge,
+                "help": (
+                    "When the most recent watchdog run finished. The "
+                    "badge reflects how stale that analysis is relative "
+                    "to now."
+                ),
                 "meta": _latest_run_meta(latest),
                 "source": "history.jsonl · latest record",
             },
@@ -381,14 +491,14 @@ def _load_eval_runs(workspace: Path, *, limit: int = 24) -> List[Dict[str, Any]]
     candidates = candidates[-limit:]
 
     runs: List[Dict[str, Any]] = []
-    for _, path in candidates:
-        run = _project_run(path)
+    for run_id, path in candidates:
+        run = _project_run(path, run_id=run_id)
         if run is not None:
             runs.append(run)
     return runs
 
 
-def _project_run(path: Path) -> Optional[Dict[str, Any]]:
+def _project_run(path: Path, *, run_id: str) -> Optional[Dict[str, Any]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -399,7 +509,33 @@ def _project_run(path: Path) -> Optional[Dict[str, Any]]:
     summary = data.get("summary") or {}
     target = data.get("target") or {}
     cfg = data.get("config") or {}
+
+    # Pick the deepest available view of the run. Cloud runs publish a
+    # Foundry portal URL via cloud_evaluation.json; fall back to a local
+    # dashboard endpoint that renders the run's report.md.
+    cloud_report_url: Optional[str] = None
+    cloud_meta = path.parent / "cloud_evaluation.json"
+    if cloud_meta.exists():
+        try:
+            meta = json.loads(cloud_meta.read_text(encoding="utf-8"))
+            if isinstance(meta, dict):
+                url = meta.get("report_url")
+                if isinstance(url, str) and url:
+                    cloud_report_url = _with_tenant(url)
+        except (OSError, ValueError):
+            pass
+    # Clicking a sparkline dot opens the most useful destination for that
+    # run: the Foundry cloud evaluation page when the run was published,
+    # otherwise the local report. The other URL is exposed as an
+    # alternative the dashboard surfaces on hover so the user can pick
+    # either side.
+    local_report_url = f"/api/runs/{run_id}/report"
+    report_link = cloud_report_url or local_report_url
+    alt_link = local_report_url if cloud_report_url else None
+    alt_label = "Local report" if cloud_report_url else None
+
     return {
+        "run_id": run_id,
         "timestamp": data.get("started_at") or data.get("finished_at"),
         "duration": _safe_float(data.get("duration_seconds")),
         "target": target.get("raw") if isinstance(target, dict) else None,
@@ -408,6 +544,11 @@ def _project_run(path: Path) -> Optional[Dict[str, Any]]:
         "items_passed_all": summary.get("items_passed_all") if isinstance(summary, dict) else None,
         "metrics": data.get("aggregate_metrics") if isinstance(data.get("aggregate_metrics"), dict) else {},
         "execution": cfg.get("execution") if isinstance(cfg, dict) else None,
+        "cloud_report_url": cloud_report_url,
+        "local_report_url": local_report_url,
+        "report_link": report_link,
+        "alt_link": alt_link,
+        "alt_label": alt_label,
     }
 
 
@@ -416,6 +557,364 @@ def _safe_float(value: Any) -> Optional[float]:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _format_iso_timestamp(value: Any) -> str:
+    """Render an ISO-8601 timestamp as a compact, human-friendly string.
+
+    Examples:
+      ``2026-05-12T22:19:29.306816+00:00`` -> ``2026-05-12 22:19 UTC``
+      ``2026-05-12T22:19:29``               -> ``2026-05-12 22:19``
+
+    Falls back to the raw string when it can't be parsed, so we never
+    drop information silently.
+    """
+    if not value:
+        return ""
+    s = str(value)
+    try:
+        from datetime import datetime, timezone
+        normalized = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is not None and dt.utcoffset() is not None:
+            dt = dt.astimezone(timezone.utc)
+            return dt.strftime("%Y-%m-%d %H:%M UTC")
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return s[:16].replace("T", " ") if "T" in s else s
+
+
+def _foundry_setup_url() -> Optional[str]:
+    """One-time Foundry tenant primer.
+
+    Opening this URL in a fresh Foundry session (or signing out first)
+    establishes the directory matching your az login tenant. After the
+    user opens it once and confirms the directory in Foundry, every
+    deep-link from the dashboard lands in the right tenant without a
+    further switch.
+    """
+    tenant = _az_tenant_id()
+    if not tenant:
+        return None
+    return f"https://ai.azure.com/?tid={tenant}"
+
+
+def _resolve_foundry_project_url(workspace: Path) -> Optional[str]:
+    """Return a stable Foundry URL for the powered-by badge.
+
+    Prefers stripping the ``/build/evaluations/...`` suffix off the most
+    recent run's cloud report URL so the badge lands on the project
+    root. Appends ``?tid=<tenant>`` (from ``az account show``) so the
+    Foundry portal silently switches directory and doesn't strand the
+    user on a "wrong tenant" page when their browser's session is in a
+    different directory.
+    """
+    results_root = workspace / ".agentops" / "results"
+    if results_root.is_dir():
+        candidates: List[Tuple[str, Path]] = []
+        for entry in results_root.iterdir():
+            if not entry.is_dir() or entry.name == "latest":
+                continue
+            meta = entry / "cloud_evaluation.json"
+            if meta.exists():
+                candidates.append((entry.name, meta))
+        candidates.sort(key=lambda kv: kv[0], reverse=True)
+        for _, meta in candidates:
+            try:
+                data = json.loads(meta.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            url = data.get("report_url") if isinstance(data, dict) else None
+            if not isinstance(url, str) or not url:
+                continue
+            for marker in ("/build/evaluations/", "/build/evaluation/"):
+                idx = url.find(marker)
+                if idx >= 0:
+                    return _with_tenant(url[:idx] + "/build/agents")
+            return _with_tenant(url + ("" if "/build/" in url else "/build/agents"))
+    return _with_tenant("https://ai.azure.com")
+
+
+def _with_tenant(url: str) -> str:
+    """Append ``?tid=<az-tenant>`` (or ``&tid=``) to a Foundry URL when
+    an az-login tenant is available, so the portal opens with the right
+    directory pre-selected. No-ops when no tenant can be resolved.
+    """
+    tenant = _az_tenant_id()
+    if not tenant:
+        return url
+    if "tid=" in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}tid={tenant}"
+
+
+_TENANT_CACHE: Dict[str, Optional[str]] = {}
+
+
+def _az_tenant_id() -> Optional[str]:
+    """Return the active Azure tenant id from ``az account show``.
+
+    Cached for the process so we don't shell out per request. Returns
+    ``None`` when az CLI is missing, not logged in, or the call fails
+    for any reason — the surrounding URL still works without ``?tid=``.
+    """
+    if "value" in _TENANT_CACHE:
+        return _TENANT_CACHE["value"]
+    tenant: Optional[str] = None
+    try:
+        az = shutil.which("az") or shutil.which("az.cmd")
+        if az:
+            result = subprocess.run(
+                [az, "account", "show", "--query", "tenantId", "-o", "tsv"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                value = result.stdout.strip()
+                if value and len(value) >= 36:
+                    tenant = value
+    except Exception:  # noqa: BLE001
+        tenant = None
+    _TENANT_CACHE["value"] = tenant
+    return tenant
+
+
+def _render_run_report_html(workspace: Path, run_id: str) -> str:
+    """Serve an eval run's local report.md (or fall back to results.json)
+    as a simple, dashboard-styled HTML page.
+
+    Path traversal is guarded by requiring the resolved directory to be a
+    direct child of ``.agentops/results/`` and rejecting any name that
+    contains separators.
+    """
+    if not run_id or any(sep in run_id for sep in ("/", "\\", "..")):
+        return _run_report_error_html(
+            "Invalid run id", f"Run id {run_id!r} is not a valid name."
+        )
+
+    results_root = workspace / ".agentops" / "results"
+    run_dir = results_root / run_id
+    if not run_dir.is_dir():
+        return _run_report_error_html(
+            "Run not found",
+            f"No run directory at .agentops/results/{run_id}.",
+        )
+
+    report_md = run_dir / "report.md"
+    results_json = run_dir / "results.json"
+
+    body_html = ""
+    if report_md.exists():
+        try:
+            md = report_md.read_text(encoding="utf-8")
+            body_html = (
+                '<article class="markdown-body">'
+                + _render_markdown(md)
+                + '</article>'
+            )
+        except OSError:
+            body_html = '<p class="empty">Could not read report.md.</p>'
+    elif results_json.exists():
+        try:
+            data = json.loads(results_json.read_text(encoding="utf-8"))
+            body_html = (
+                '<p class="empty">No report.md found. Showing raw results.json.</p>'
+                '<pre class="report-md">' + _html_escape(json.dumps(data, indent=2)) + '</pre>'
+            )
+        except (OSError, ValueError):
+            body_html = '<p class="empty">Could not read results.json.</p>'
+    else:
+        body_html = '<p class="empty">No artifacts found for this run.</p>'
+
+    return _RUN_REPORT_TEMPLATE.format(
+        title=_html_escape(f"Run · {run_id}"),
+        run_id=_html_escape(run_id),
+        body=body_html,
+        icon_uri=_icon_data_uri(),
+    )
+
+
+def _render_markdown(text: str) -> str:
+    """Render markdown to HTML using the ``markdown`` package when
+    available; fall back to an escaped <pre> block otherwise.
+
+    Enabled extensions cover the syntax the AgentOps reporter actually
+    emits: GitHub-style tables and fenced code blocks.
+    """
+    text = _normalize_lists_for_markdown(text)
+    try:
+        import markdown as md_lib  # type: ignore[import-not-found]
+    except ImportError:
+        return '<pre class="report-md">' + _html_escape(text) + '</pre>'
+    try:
+        return md_lib.markdown(
+            text,
+            extensions=["tables", "fenced_code", "sane_lists"],
+            output_format="html5",
+        )
+    except Exception:  # noqa: BLE001
+        return '<pre class="report-md">' + _html_escape(text) + '</pre>'
+
+
+def _normalize_lists_for_markdown(text: str) -> str:
+    """Ensure a blank line separates a list from the preceding paragraph.
+
+    Older AgentOps reports emit:
+
+        **Result:** PASS
+        - **Target:** ...
+        - **Dataset:** ...
+
+    Python-Markdown won't recognise the list without a blank line above
+    it and renders the whole thing as one paragraph. We insert a blank
+    line whenever a list item directly follows a non-empty, non-list
+    line so we don't have to regenerate every saved report.
+    """
+    lines = text.splitlines()
+    out: List[str] = []
+    for line in lines:
+        stripped = line.lstrip()
+        is_list_item = (
+            stripped.startswith(("- ", "* ", "+ "))
+            or (len(stripped) > 2 and stripped[0].isdigit() and stripped[1:3] in (". ", ") "))
+        )
+        if is_list_item and out:
+            prev = out[-1].rstrip()
+            prev_stripped = prev.lstrip()
+            prev_is_list = prev_stripped.startswith(("- ", "* ", "+ "))
+            if prev and not prev_is_list:
+                out.append("")
+        out.append(line)
+    return "\n".join(out)
+
+
+def _run_report_error_html(title: str, detail: str) -> str:
+    return _RUN_REPORT_TEMPLATE.format(
+        title=_html_escape(title),
+        run_id="",
+        body=f'<p class="empty">{_html_escape(detail)}</p>',
+        icon_uri=_icon_data_uri(),
+    )
+
+
+_RUN_REPORT_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>{title} · AgentOps</title>
+<link rel="icon" type="image/png" href="{icon_uri}" />
+<style>
+  :root {{ color-scheme: dark; }}
+  body {{
+    margin: 0; padding: 32px 40px;
+    background: #08090b; color: #f8fafc;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+      "Inter", system-ui, sans-serif;
+    font-size: 14px; line-height: 1.55;
+  }}
+  header {{
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 24px;
+    padding-bottom: 16px; border-bottom: 1px solid #1f2228;
+  }}
+  header img {{ width: 36px; height: 36px; border-radius: 10px; }}
+  h1 {{ font-size: 18px; margin: 0; font-weight: 700; }}
+  h1 small {{
+    color: #94a3b8; font-weight: 500; font-size: 12px;
+    margin-left: 8px; font-family: monospace;
+  }}
+  a.back {{ color: #38bdf8; text-decoration: none; font-size: 12px; }}
+  a.back:hover {{ text-decoration: underline; }}
+  pre.report-md {{
+    background: #161618; border: 1px solid #1f2228; border-radius: 12px;
+    padding: 18px 22px; overflow-x: auto;
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px; line-height: 1.55;
+    white-space: pre-wrap; word-break: break-word;
+  }}
+  p.empty {{ color: #94a3b8; font-style: italic; }}
+  .markdown-body {{
+    max-width: 980px; margin: 0 auto;
+  }}
+  .markdown-body h1, .markdown-body h2, .markdown-body h3,
+  .markdown-body h4 {{
+    color: #f8fafc; font-weight: 700; letter-spacing: -0.01em;
+    margin: 28px 0 12px;
+  }}
+  .markdown-body h1 {{
+    font-size: 22px; padding-bottom: 10px;
+    border-bottom: 1px solid #1f2228;
+  }}
+  .markdown-body h2 {{ font-size: 17px; }}
+  .markdown-body h3 {{ font-size: 14px; color: #94a3b8;
+    text-transform: uppercase; letter-spacing: 0.06em; }}
+  .markdown-body h4 {{ font-size: 13px; color: #cbd5e1; }}
+  .markdown-body p {{ margin: 8px 0; }}
+  .markdown-body ul, .markdown-body ol {{
+    margin: 8px 0; padding-left: 24px;
+  }}
+  .markdown-body li {{ margin: 4px 0; }}
+  .markdown-body strong {{ color: #f8fafc; font-weight: 700; }}
+  .markdown-body em {{ color: #cbd5e1; }}
+  .markdown-body a {{ color: #38bdf8; text-decoration: none; }}
+  .markdown-body a:hover {{ text-decoration: underline; }}
+  .markdown-body code {{
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1px 6px; border-radius: 4px;
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px; color: #f1f5f9;
+  }}
+  .markdown-body pre {{
+    background: #161618; border: 1px solid #1f2228; border-radius: 10px;
+    padding: 14px 18px; overflow-x: auto;
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px; line-height: 1.55;
+    margin: 12px 0;
+  }}
+  .markdown-body pre code {{
+    background: transparent; padding: 0; border-radius: 0;
+    font-size: inherit; color: inherit;
+  }}
+  .markdown-body table {{
+    border-collapse: collapse; margin: 14px 0;
+    width: 100%; font-size: 13px;
+  }}
+  .markdown-body th, .markdown-body td {{
+    border: 1px solid #1f2228;
+    padding: 8px 12px; text-align: left; vertical-align: top;
+  }}
+  .markdown-body th {{
+    background: #1c1c1f; color: #cbd5e1;
+    font-weight: 700; font-size: 11px;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }}
+  .markdown-body tr:nth-child(even) td {{
+    background: rgba(255, 255, 255, 0.02);
+  }}
+  .markdown-body blockquote {{
+    margin: 12px 0; padding: 6px 16px;
+    border-left: 3px solid #38bdf8;
+    color: #cbd5e1; background: rgba(56, 189, 248, 0.05);
+    border-radius: 0 6px 6px 0;
+  }}
+  .markdown-body hr {{
+    border: 0; border-top: 1px solid #1f2228; margin: 24px 0;
+  }}
+</style>
+</head>
+<body>
+<header>
+  <img src="{icon_uri}" alt="AgentOps" />
+  <h1>Eval run<small>{run_id}</small></h1>
+  <span style="flex:1"></span>
+  <a class="back" href="/" onclick="if (window.history.length > 1) {{ window.history.back(); return false; }}">← back to dashboard</a>
+</header>
+{body}
+</body>
+</html>
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +937,7 @@ def _telemetry_status() -> Dict[str, Any]:
             "enabled": True,
             "source": "env",
             "label": "App Insights",
-            "detail": "Connected via APPLICATIONINSIGHTS_CONNECTION_STRING.",
+            "detail": "Connected via <code>APPLICATIONINSIGHTS_CONNECTION_STRING</code>.",
             "portal_url": _appinsights_portal_url(explicit_conn),
             "tone": "ok",
         }
@@ -447,7 +946,7 @@ def _telemetry_status() -> Dict[str, Any]:
             "enabled": True,
             "source": "otlp",
             "label": "OTLP exporter",
-            "detail": f"AGENTOPS_OTLP_ENDPOINT={otlp}",
+            "detail": f"<code>AGENTOPS_OTLP_ENDPOINT</code> = {_html_escape(otlp)}",
             "portal_url": None,
             "tone": "ok",
         }
@@ -473,9 +972,11 @@ def _telemetry_status() -> Dict[str, Any]:
             "source": "discovery_failed",
             "label": "Telemetry off",
             "detail": (
-                "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT is set but no App "
-                "Insights was discovered. Connect one in Foundry or set "
-                "APPLICATIONINSIGHTS_CONNECTION_STRING."
+                'In Foundry: <strong>Project details &rarr; Connected '
+                "resources &rarr; Add connection &rarr; Application "
+                "Insights</strong>. "
+                '<a href="https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup" '
+                'target="_blank" rel="noopener noreferrer">Docs &#x2197;</a>'
             ),
             "portal_url": None,
             "tone": "warn",
@@ -485,8 +986,11 @@ def _telemetry_status() -> Dict[str, Any]:
         "source": "off",
         "label": "Telemetry off",
         "detail": (
-            "Set AZURE_AI_FOUNDRY_PROJECT_ENDPOINT for auto-discovery, "
-            "or APPLICATIONINSIGHTS_CONNECTION_STRING to route traces."
+            'Set <code>AZURE_AI_FOUNDRY_PROJECT_ENDPOINT</code> and '
+            "wire App Insights in Foundry (Project details &rarr; "
+            "Connected resources). "
+            '<a href="https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup" '
+            'target="_blank" rel="noopener noreferrer">Docs &#x2197;</a>'
         ),
         "portal_url": None,
         "tone": "muted",
@@ -596,8 +1100,8 @@ def _badge_runs(count: int) -> str:
     if count >= 10:
         return "well sampled"
     if count >= 3:
-        return "warming up"
-    return "starting out"
+        return "moderate sample"
+    return "low sample"
 
 
 def _badge_pass_rate(rate: float) -> Dict[str, str]:
@@ -629,7 +1133,12 @@ def _metric_trend_badge(series: List[float], *, is_latency: bool) -> Dict[str, s
 def _render_card(card: Dict[str, Any], *, hero: bool = False) -> str:
     series = card.get("series", [])
     labels = card.get("labels") or []
-    spark = _sparkline_svg(series, labels=labels)
+    spark = _sparkline_svg(
+        series, labels=labels,
+        links=card.get("links"),
+        alt_links=card.get("alt_links"),
+        alt_labels=card.get("alt_labels"),
+    )
     badge = card["badge"]
     css_class = "card hero" if hero else "card"
     value = card.get("value", 0)
@@ -669,16 +1178,52 @@ def _render_card(card: Dict[str, Any], *, hero: bool = False) -> str:
             f'<span class="source-icon">⌖</span>{_html_escape(card["source"])}</div>'
         )
 
+    help_html = ""
+    if card.get("help"):
+        help_html = (
+            '<span class="card-help" tabindex="0" aria-label="About this card">'
+            '<span class="card-help-icon" aria-hidden="true">i</span>'
+            f'<span class="card-help-tooltip" role="tooltip">{_html_escape(card["help"])}</span>'
+            '</span>'
+        )
+
     return (
         f'<div class="{css_class}">'
+        f'{help_html}'
         f'<div class="card-label">{_html_escape(card["label"])}</div>'
         f'<div class="{value_css}">{value_inner}{unit_html}</div>'
         f"{spark}"
         f"{hover_html}"
         f"{meta_html}"
+        f'<div class="badge-row">'
         f'<div class="badge tone-{badge["tone"]}">{_html_escape(badge["label"])}</div>'
+        f'</div>'
         f"{footer_html}"
         f"</div>"
+    )
+
+
+def _render_exec_section_tag(execution: Optional[str]) -> str:
+    """Render a small inline tag next to a section title indicating the
+    execution mode of the latest run (cloud vs local).
+
+    Kept understated — one indicator per section, not per card — so it
+    informs without dominating the visual hierarchy.
+    """
+    if not execution:
+        return ""
+    if execution == "cloud":
+        return (
+            '<span class="section-exec-tag tag-cloud" '
+            'title="Latest run executed in Foundry cloud">'
+            '<span class="section-exec-dot"></span>'
+            'Foundry cloud</span>'
+        )
+    return (
+        '<span class="section-exec-tag tag-local" '
+        'title="Latest run executed locally">'
+        '<span class="section-exec-dot"></span>'
+        'Local</span>'
     )
 
 
@@ -733,17 +1278,57 @@ def _render_telemetry_card(telemetry: Dict[str, Any]) -> str:
     )
 
 
-def _sparkline_svg(series: List[float], *, labels: Optional[List[str]] = None) -> str:
+def render_production_grid_html(production: Dict[str, Any]) -> str:
+    """Return the inner HTML of the production-telemetry grid only.
+
+    Used by the ``/api/production/html`` endpoint that the dashboard's
+    deferred-load JS calls after the page is on screen. Keeps the slow
+    App Insights round-trip off the initial render.
+    """
+    if not production.get("has_data") or not production.get("cards"):
+        return (
+            '<div class="card hero loading-card">'
+            '<div class="card-label">No production telemetry yet</div>'
+            '<div class="card-value card-value-text">—</div>'
+            '<div class="telemetry-detail">'
+            'No invocations found in the selected window. The Foundry '
+            'project may not have produced any traces yet.'
+            '</div>'
+            '</div>'
+        )
+    return "".join(_render_card(c, hero=True) for c in production["cards"])
+
+
+def _sparkline_svg(
+    series: List[float],
+    *,
+    labels: Optional[List[str]] = None,
+    links: Optional[List[str]] = None,
+    alt_links: Optional[List[Optional[str]]] = None,
+    alt_labels: Optional[List[Optional[str]]] = None,
+) -> str:
     if not series:
         return ""
     window = series[-12:]
     label_window = (labels or [])[-12:]
-    # Align label count with the window.
+    link_window = (links or [])[-12:]
+    alt_link_window = (alt_links or [])[-12:]
+    alt_label_window = (alt_labels or [])[-12:]
+    # Align label/link count with the window.
     if len(label_window) < len(window):
         label_window = label_window + [""] * (len(window) - len(label_window))
+    if len(link_window) < len(window):
+        link_window = link_window + [None] * (len(window) - len(link_window))
+    if len(alt_link_window) < len(window):
+        alt_link_window = alt_link_window + [None] * (len(window) - len(alt_link_window))
+    if len(alt_label_window) < len(window):
+        alt_label_window = alt_label_window + [None] * (len(window) - len(alt_label_window))
     if len(window) == 1:
         window = [window[0], window[0]]
         label_window = [label_window[0] if label_window else "", label_window[0] if label_window else ""]
+        link_window = [link_window[0] if link_window else None, link_window[0] if link_window else None]
+        alt_link_window = [alt_link_window[0] if alt_link_window else None, alt_link_window[0] if alt_link_window else None]
+        alt_label_window = [alt_label_window[0] if alt_label_window else None, alt_label_window[0] if alt_label_window else None]
     width = 240
     height = 56
     pad = 4
@@ -763,22 +1348,39 @@ def _sparkline_svg(series: List[float], *, labels: Optional[List[str]] = None) -
         + f" {last_x:.1f},{height - pad} {pad:.1f},{height - pad}"
     )
 
-    # Render every point as an interactive dot. The .dot.is-last class
-    # styles the rightmost (current) point more prominently.
     dots: List[str] = []
     for i, ((x, y), value) in enumerate(zip(points, window)):
         label = _html_escape(label_window[i] if i < len(label_window) else "")
+        href = link_window[i] if i < len(link_window) else None
+        alt_href = alt_link_window[i] if i < len(alt_link_window) else None
+        alt_label = alt_label_window[i] if i < len(alt_label_window) else None
         is_last = "is-last" if i == len(points) - 1 else ""
+        is_clickable = "is-clickable" if href else ""
         formatted_value = (
             f"{value:.2f}" if isinstance(value, float) and not value.is_integer()
             else f"{int(value)}"
         )
-        dots.append(
-            f'<circle class="dot {is_last}" cx="{x:.1f}" cy="{y:.1f}" r="3.5" '
-            f'fill="currentColor" data-v="{formatted_value}" data-l="{label}">'
-            f'<title>{label}{" — " + formatted_value if label else formatted_value}</title>'
+        alt_attrs = ""
+        if alt_href and alt_label:
+            alt_attrs = (
+                f' data-alt-href="{_html_escape(alt_href)}"'
+                f' data-alt-label="{_html_escape(alt_label)}"'
+            )
+        circle = (
+            f'<circle class="dot {is_last} {is_clickable}" cx="{x:.1f}" cy="{y:.1f}" r="3.5" '
+            f'fill="currentColor" data-v="{formatted_value}" data-l="{label}"{alt_attrs}>'
+            f'<title>{label}{" — " + formatted_value if label else formatted_value}'
+            f'{" · click to open" if href else ""}</title>'
             f'</circle>'
         )
+        if href:
+            new_tab = not href.startswith("/")
+            target_attr = ' target="_blank" rel="noopener noreferrer"' if new_tab else ""
+            dots.append(
+                f'<a class="dot-link" href="{_html_escape(href)}"{target_attr}>{circle}</a>'
+            )
+        else:
+            dots.append(circle)
     dots_svg = "".join(dots)
 
     return (
@@ -810,6 +1412,20 @@ def _icon_data_uri() -> str:
         return "data:image/svg+xml;utf8," + svg
 
 
+def _foundry_logo_data_uri() -> Optional[str]:
+    """Read the bundled foundry.svg and return a base64 data URI.
+
+    Returns ``None`` when the asset is missing (older installs) so the
+    powered-by badge can be skipped gracefully.
+    """
+    try:
+        data = _pkg_files("agentops.templates").joinpath("foundry.svg").read_bytes()
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"data:image/svg+xml;base64,{b64}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def render_dashboard_html(payload: Dict[str, Any]) -> str:
     """Render the dashboard from a payload built by
     :func:`build_dashboard_payload`. Returns a complete HTML document.
@@ -825,8 +1441,11 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
     eval_section = ""
     if payload["eval"]["has_runs"]:
         cards_html = "".join(_render_card(c) for c in payload["eval"]["cards"])
+        exec_tag = _render_exec_section_tag(
+            payload["eval"].get("latest_execution"),
+        )
         eval_section = (
-            '<div class="section-title">Evaluation runs</div>'
+            f'<div class="section-title">Evaluation runs{exec_tag}</div>'
             f'<div class="grid">{cards_html}{telemetry_card}</div>'
         )
     else:
@@ -842,31 +1461,58 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
     metrics_section = ""
     if payload["metrics"]:
         metrics_html = "".join(_render_card(c) for c in payload["metrics"])
+        exec_tag = _render_exec_section_tag(
+            payload["eval"].get("latest_execution") if payload["eval"].get("has_runs") else None,
+        )
         metrics_section = (
-            '<div class="section-title">Quality metrics</div>'
+            f'<div class="section-title">Quality metrics{exec_tag}</div>'
             f'<div class="grid">{metrics_html}</div>'
         )
 
     production = payload.get("production") or {}
     production_section = ""
+    portal_link = ""
+    portal_url = telemetry.get("portal_url") if isinstance(telemetry, dict) else None
+    if portal_url:
+        portal_link = (
+            f' <a class="section-link" href="{_html_escape(portal_url)}" '
+            f'target="_blank" rel="noopener noreferrer">'
+            f'View in App Insights →</a>'
+        )
+
     if production.get("has_data") and production.get("cards"):
+        # Server-side render (rare — happens when /api/production/html is
+        # invoked directly without a deferred placeholder).
         prod_html = "".join(_render_card(c, hero=True) for c in production["cards"])
-        # Pull the App Insights portal link from the telemetry status, when
-        # available, and put it inline next to the section title so the
-        # user can jump straight to the Logs blade.
-        portal_link = ""
-        portal_url = telemetry.get("portal_url") if isinstance(telemetry, dict) else None
-        if portal_url:
-            portal_link = (
-                f' <a class="section-link" href="{_html_escape(portal_url)}" '
-                f'target="_blank" rel="noopener noreferrer">'
-                f'View in App Insights →</a>'
-            )
         production_section = (
             '<div class="section-title">Production telemetry'
             ' <span class="live-pill">live · App Insights</span>'
             f'{portal_link}</div>'
-            f'<div class="grid">{prod_html}</div>'
+            f'<div class="grid" id="production-grid">{prod_html}</div>'
+        )
+    elif production.get("deferred"):
+        # Telemetry is wired up; the cards will arrive async from
+        # /api/production/html so the page can render immediately.
+        # Render 4 skeleton cards matching the eventual grid layout
+        # (Invocations / Error rate / P95 latency / Tokens) so the
+        # page does not visually re-flow when the fetch lands.
+        skeleton_labels = ("Invocations", "Error rate", "P95 latency", "Tokens")
+        skeleton_cards = "".join(
+            (
+                '<div class="card hero loading-card skeleton-card">'
+                f'<div class="card-label">{label}</div>'
+                '<div class="card-value skeleton-bar skeleton-bar-value"></div>'
+                '<div class="skeleton-bar skeleton-bar-spark"></div>'
+                '<div class="skeleton-bar skeleton-bar-detail"></div>'
+                '</div>'
+            )
+            for label in skeleton_labels
+        )
+        production_section = (
+            '<div class="section-title">Production telemetry'
+            ' <span class="live-pill">live · App Insights</span>'
+            f'{portal_link}</div>'
+            f'<div class="grid" id="production-grid">{skeleton_cards}</div>'
         )
 
     watchdog = payload["watchdog"]
@@ -896,6 +1542,25 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
     workspace_display = _shorten_workspace(payload["workspace"])
     range_info = payload.get("time_range") or {}
     range_bar = _render_range_bar(range_info)
+
+    foundry_uri = _foundry_logo_data_uri()
+    foundry_url = payload.get("foundry_project_url") or "https://ai.azure.com"
+    if foundry_uri:
+        powered_by_html = (
+            f'<a class="powered-by" href="{_html_escape(foundry_url)}" '
+            'target="_blank" rel="noopener noreferrer" '
+            'title="Open this project in Microsoft Foundry">'
+            f'<img src="{foundry_uri}" alt="Foundry" />'
+            '<span>Your Foundry project &#x2197;</span>'
+            '</a>'
+        )
+    else:
+        powered_by_html = ""
+
+    # Banner removed; the primer click is now folded into the project
+    # action button above, which carries the ?tid= hint.
+    setup_banner_html = ""
+
     return _DASHBOARD_TEMPLATE.format(
         eval_section=eval_section,
         metrics_section=metrics_section,
@@ -906,6 +1571,8 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
         workspace_display=workspace_display,
         workspace=payload["workspace"],
         icon_uri=_icon_data_uri(),
+        powered_by=powered_by_html,
+        setup_banner=setup_banner_html,
         range_bar=range_bar,
         range_label=_html_escape(range_info.get("label", "")),
     )
@@ -939,10 +1606,31 @@ def _render_range_bar(range_info: Dict[str, Any]) -> str:
         f'</form>'
     )
 
+    refresh_control = (
+        '<div class="refresh-control" title="How often the dashboard reloads">'
+        '<svg class="refresh-icon" viewBox="0 0 16 16" width="12" height="12" '
+        'fill="none" stroke="currentColor" stroke-width="1.6" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        '<path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89" />'
+        '<polyline points="13.5,2 13.5,5 10.5,5" />'
+        '</svg>'
+        '<span class="refresh-label">Refresh</span>'
+        '<select id="refreshSelect" aria-label="Refresh period">'
+        '<option value="0">Off</option>'
+        '<option value="60000">1 min</option>'
+        '<option value="300000" selected>5 min</option>'
+        '<option value="900000">15 min</option>'
+        '<option value="1800000">30 min</option>'
+        '<option value="3600000">1 hour</option>'
+        '</select>'
+        '</div>'
+    )
+
     return (
         '<div class="range-bar">'
         + '<div class="range-pills">' + "".join(pills) + '</div>'
         + custom_form
+        + refresh_control
         + '</div>'
     )
 
@@ -958,12 +1646,14 @@ def _days_ago_iso(days: int) -> str:
 
 
 def _shorten_workspace(path: str) -> str:
-    """Show only the folder name + parent for compact heading display."""
-    p = Path(path)
-    parts = p.parts
-    if len(parts) <= 2:
-        return path
-    return str(Path(*parts[-2:]))
+    """Show only the current folder name for compact heading display.
+
+    Using the last two segments was risky because the parent folder is
+    not always meaningful (e.g. ``Desktop\\agent-x``, ``tmp\\agent-x``).
+    The full path is still kept in the title attribute for context.
+    """
+    name = Path(path).name
+    return name or path
 
 
 _DASHBOARD_TEMPLATE = """<!doctype html>
@@ -972,7 +1662,6 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
 <meta charset="utf-8" />
 <title>AgentOps Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="refresh" content="15" />
 <link rel="icon" type="image/png" href="{icon_uri}" />
 <style>
   :root {{
@@ -1019,10 +1708,33 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
     margin-top: 2px;
   }}
   header .stats {{
-    display: flex; align-items: center; gap: 18px;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
     color: var(--text-dim); font-size: 12px; font-weight: 500;
   }}
+  header .stats-counts {{
+    display: flex; align-items: center; gap: 18px;
+  }}
   header .stat-num {{ color: var(--text); font-size: 18px; font-weight: 600; }}
+  header .powered-by {{
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 12px 5px 9px; border-radius: 999px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 12px; font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease,
+                color 0.15s ease;
+  }}
+  header .powered-by:hover {{
+    background: rgba(56, 189, 248, 0.10);
+    color: var(--text);
+    border-color: rgba(56, 189, 248, 0.45);
+  }}
+  header .powered-by img {{
+    height: 14px; width: auto; display: block;
+  }}
   .section-title {{
     margin: 32px 0 14px; font-size: 11px; font-weight: 700;
     color: var(--text-faint); letter-spacing: 0.12em;
@@ -1038,6 +1750,30 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
     font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
     text-transform: uppercase; vertical-align: middle;
     animation: live-pulse 2s ease-in-out infinite;
+  }}
+  .loading-card {{
+    opacity: 0.85; border-style: dashed;
+  }}
+  .loading-card .card-value {{
+    font-size: 28px;
+  }}
+  .skeleton-bar {{
+    display: block; border-radius: 6px;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.04) 0%,
+      rgba(255, 255, 255, 0.10) 50%,
+      rgba(255, 255, 255, 0.04) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }}
+  .skeleton-bar-value {{ height: 30px; width: 60%; margin: 8px 0 12px; }}
+  .skeleton-bar-spark  {{ height: 36px; width: 100%; margin-bottom: 10px; }}
+  .skeleton-bar-detail {{ height: 12px; width: 80%; }}
+  @keyframes shimmer {{
+    0%   {{ background-position: 200% 0; }}
+    100% {{ background-position: -200% 0; }}
   }}
   .section-link {{
     margin-left: 12px; color: var(--info); text-decoration: none;
@@ -1092,6 +1828,48 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
     margin-left: auto;
     font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
   }}
+  .refresh-control {{
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 10px 5px 12px; border-radius: 999px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+    transition: background 0.15s ease, color 0.15s ease,
+                border-color 0.15s ease;
+  }}
+  .refresh-control:hover {{
+    background: rgba(255, 255, 255, 0.06); color: var(--text);
+    border-color: rgba(56, 189, 248, 0.35);
+  }}
+  .refresh-control .refresh-icon {{
+    color: var(--info); opacity: 0.9;
+  }}
+  .refresh-control.spinning .refresh-icon {{
+    animation: refresh-spin 0.8s linear;
+  }}
+  .refresh-label {{
+    color: var(--text-faint); text-transform: uppercase;
+    font-size: 10px; letter-spacing: 0.06em;
+  }}
+  #refreshSelect {{
+    appearance: none; -webkit-appearance: none;
+    background: transparent; color: var(--text);
+    border: 0; outline: none;
+    font: inherit; font-weight: 600;
+    padding: 0 18px 0 2px; cursor: pointer;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%2394a3b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='2,4 5,7 8,4'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 2px center;
+  }}
+  #refreshSelect option {{
+    background: var(--card); color: var(--text);
+  }}
+  @keyframes refresh-spin {{
+    from {{ transform: rotate(0deg); }}
+    to   {{ transform: rotate(360deg); }}
+  }}
   .grid {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 14px;
@@ -1107,6 +1885,64 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
     position: relative; overflow: hidden;
   }}
   .card:hover {{ border-color: var(--border-strong); }}
+  .card-help {{
+    position: absolute; top: 12px; right: 14px;
+    width: 16px; height: 16px;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: help; z-index: 3;
+  }}
+  .card-help-icon {{
+    width: 16px; height: 16px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 10px; font-weight: 700; font-style: italic;
+    font-family: Georgia, "Times New Roman", serif;
+    display: inline-flex; align-items: center; justify-content: center;
+    line-height: 1; user-select: none;
+    transition: background 0.15s ease, color 0.15s ease,
+                border-color 0.15s ease;
+  }}
+  .card-help:hover .card-help-icon,
+  .card-help:focus-within .card-help-icon {{
+    background: rgba(56, 189, 248, 0.18);
+    color: var(--info);
+    border-color: rgba(56, 189, 248, 0.45);
+  }}
+  .card-help-tooltip {{
+    position: absolute; top: 26px; right: -2px;
+    width: max-content; max-width: 260px;
+    padding: 10px 12px;
+    background: #0d0e10; color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    font-size: 11.5px; line-height: 1.55; font-weight: 500;
+    letter-spacing: 0.01em;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+    opacity: 0; visibility: hidden;
+    transform: translateY(-4px);
+    transition: opacity 0.12s ease, transform 0.12s ease,
+                visibility 0s linear 0.12s;
+    pointer-events: none;
+    text-transform: none;
+    white-space: pre-line;
+    text-align: left;
+  }}
+  .card-help-tooltip::before {{
+    content: "";
+    position: absolute; top: -5px; right: 6px;
+    width: 8px; height: 8px;
+    background: #0d0e10;
+    border-left: 1px solid var(--border-strong);
+    border-top: 1px solid var(--border-strong);
+    transform: rotate(45deg);
+  }}
+  .card-help:hover .card-help-tooltip,
+  .card-help:focus-within .card-help-tooltip {{
+    opacity: 1; visibility: visible; transform: translateY(0);
+    transition: opacity 0.12s ease, transform 0.12s ease,
+                visibility 0s linear 0s;
+  }}
   .card.hero {{
     background: linear-gradient(165deg, var(--card-hi) 0%, var(--card) 100%);
   }}
@@ -1137,7 +1973,18 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
   }}
   .telemetry-detail {{
     color: var(--text-dim); font-size: 12px; line-height: 1.45;
+    overflow-wrap: anywhere; word-break: break-word;
   }}
+  .telemetry-detail code {{
+    font-size: 11px; padding: 1px 4px; border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text); font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+  }}
+  .telemetry-detail a {{
+    color: var(--info); text-decoration: none; font-weight: 600;
+  }}
+  .telemetry-detail a:hover {{ text-decoration: underline; }}
+  .telemetry-detail strong {{ color: var(--text); font-weight: 600; }}
   .card-link {{
     color: var(--info); text-decoration: none; font-size: 12px;
     font-weight: 600; margin-top: 4px;
@@ -1161,24 +2008,77 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
   .sparkline:hover .dot {{ opacity: 0.55; }}
   .sparkline .dot.is-last {{ opacity: 1; }}
   .sparkline .dot:hover {{ opacity: 1; r: 5; }}
+  .sparkline .dot.is-clickable {{ cursor: pointer; }}
+  .sparkline a.dot-link {{ cursor: pointer; }}
+  .sparkline a.dot-link:hover .dot {{
+    opacity: 1; r: 5.5; filter: drop-shadow(0 0 4px currentColor);
+  }}
   .card.hero .sparkline {{ color: var(--info); }}
   .hover-detail {{
     color: var(--text-dim); font-size: 11px; font-weight: 500;
     font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
-    margin-top: 2px; min-height: 14px;
-    transition: color 0.12s ease;
+    margin-top: 6px; min-height: 14px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   }}
-  .hover-detail.active {{ color: var(--info); }}
+  .hover-detail.active {{ color: var(--text); }}
+  .hover-detail .hover-label {{ color: inherit; }}
+  .hover-detail .hover-alt-pill {{
+    display: inline-flex; align-items: center;
+    padding: 1px 8px; border-radius: 999px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+      "Inter", system-ui, sans-serif;
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em;
+    color: var(--info); text-decoration: none;
+    background: rgba(56, 189, 248, 0.10);
+    border: 1px solid rgba(56, 189, 248, 0.28);
+    pointer-events: auto;
+    transition: background 0.12s ease, color 0.12s ease,
+                border-color 0.12s ease;
+  }}
+  .hover-detail .hover-alt-pill:hover {{
+    background: rgba(56, 189, 248, 0.22);
+    color: var(--text);
+    border-color: rgba(56, 189, 248, 0.55);
+  }}
   .dot {{
     display: inline-block; width: 9px; height: 9px; border-radius: 50%;
     margin-right: 8px; vertical-align: middle;
   }}
   .dot-on  {{ background: var(--ok); box-shadow: 0 0 8px rgba(74, 222, 128, 0.6); }}
   .dot-off {{ background: var(--muted); }}
+  .badge-row {{
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    margin-top: 4px;
+  }}
   .badge {{
     display: inline-flex; align-self: flex-start; align-items: center;
     padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600;
-    text-transform: lowercase; margin-top: 4px; letter-spacing: 0.01em;
+    text-transform: lowercase; letter-spacing: 0.01em;
+  }}
+  .section-exec-tag {{
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-left: 10px; padding: 2px 9px 2px 8px;
+    border-radius: 999px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: none;
+    vertical-align: middle;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+      "Inter", system-ui, sans-serif;
+  }}
+  .section-exec-tag.tag-cloud {{
+    color: var(--info);
+    background: rgba(56, 189, 248, 0.10);
+    border: 1px solid rgba(56, 189, 248, 0.25);
+  }}
+  .section-exec-tag.tag-local {{
+    color: var(--text-faint);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+  }}
+  .section-exec-dot {{
+    width: 5px; height: 5px; border-radius: 50%;
+    background: currentColor;
+  }}
   }}
   .tone-ok    {{ background: rgba(74, 222, 128, 0.12); color: var(--ok); }}
   .tone-info  {{ background: rgba(56, 189, 248, 0.12); color: var(--info); }}
@@ -1211,15 +2111,20 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
   <div class="brand">
     <img src="{icon_uri}" alt="AgentOps" />
     <div>
-      <h1>AgentOps dashboard</h1>
+      <h1>AgentOps Dashboard</h1>
       <div class="subtitle" title="{workspace}">{workspace_display}</div>
     </div>
   </div>
   <div class="stats">
-    <div><span class="stat-num">{eval_runs}</span> eval(s)</div>
-    <div><span class="stat-num">{analyses}</span> analysis run(s)</div>
+    <div class="stats-counts">
+      <div><span class="stat-num">{eval_runs}</span> eval(s)</div>
+      <div><span class="stat-num">{analyses}</span> analysis run(s)</div>
+    </div>
+    {powered_by}
   </div>
 </header>
+
+{setup_banner}
 
 {range_bar}
 <div class="range-current">window: {range_label}</div>
@@ -1229,13 +2134,15 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
 {metrics_section}
 {watchdog_section}
 
-<footer>Auto-refreshes every 15s · <code>agentops dashboard</code></footer>
+<footer>Auto-refresh: <span id="refreshFooter">every 5 min</span> · <code>agentops dashboard</code></footer>
 
 <script>
-// Interactive sparkline hover: highlight the hovered point and swap the
-// card's headline value to that point's value, then restore on leave.
-(function() {{
-  document.querySelectorAll('.card').forEach(function(card) {{
+// Wire interactive sparkline hover on every card. Exposed as a function
+// so we can re-run it after the production grid is replaced via fetch.
+function wireSparklineHover(root) {{
+  (root || document).querySelectorAll('.card').forEach(function(card) {{
+    if (card.dataset.hoverWired === '1') return;
+    card.dataset.hoverWired = '1';
     const valueNum = card.querySelector('.value-num');
     const hoverDetail = card.querySelector('.hover-detail');
     if (!valueNum) return;
@@ -1244,9 +2151,28 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
       dot.addEventListener('mouseenter', function() {{
         const v = dot.getAttribute('data-v');
         const l = dot.getAttribute('data-l');
+        const altHref = dot.getAttribute('data-alt-href');
+        const altLabel = dot.getAttribute('data-alt-label');
         if (v) valueNum.textContent = v;
         if (hoverDetail) {{
-          hoverDetail.textContent = l || '';
+          hoverDetail.innerHTML = '';
+          if (l) {{
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'hover-label';
+            labelSpan.textContent = l;
+            hoverDetail.appendChild(labelSpan);
+          }}
+          if (altHref && altLabel) {{
+            const a = document.createElement('a');
+            a.className = 'hover-alt-pill';
+            a.href = altHref;
+            if (!altHref.startsWith('/')) {{
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+            }}
+            a.textContent = altLabel + ' \u2197';
+            hoverDetail.appendChild(a);
+          }}
           hoverDetail.classList.add('active');
         }}
       }});
@@ -1254,10 +2180,72 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
     card.addEventListener('mouseleave', function() {{
       valueNum.textContent = origValue;
       if (hoverDetail) {{
-        hoverDetail.textContent = '';
+        hoverDetail.innerHTML = '';
         hoverDetail.classList.remove('active');
       }}
     }});
+  }});
+}}
+wireSparklineHover();
+
+// Deferred load of the Production telemetry grid. The initial page render
+// skips the App Insights round-trip so the dashboard opens immediately;
+// this fetch fills in the slow part asynchronously without blocking.
+(function() {{
+  const grid = document.getElementById('production-grid');
+  if (!grid || !grid.querySelector('.loading-card')) return;
+  const params = window.location.search || '';
+  fetch('/api/production/html' + params)
+    .then(function(r) {{ return r.ok ? r.text() : null; }})
+    .then(function(html) {{
+      if (html === null) return;
+      grid.innerHTML = html;
+      wireSparklineHover(grid);
+    }})
+    .catch(function() {{ /* best-effort; leave the placeholder up */ }});
+}})();
+
+// Configurable auto-refresh. Replaces the old <meta http-equiv="refresh">
+// so the user can pick the cadence (Off / 1m / 5m / 15m / 30m / 1h) and
+// the choice persists across reloads via localStorage.
+(function() {{
+  const STORAGE_KEY = 'agentops.dashboard.refreshMs';
+  const select = document.getElementById('refreshSelect');
+  const footer = document.getElementById('refreshFooter');
+  const control = select ? select.closest('.refresh-control') : null;
+  if (!select) return;
+
+  const LABELS = {{
+    '0':       'off',
+    '60000':   'every 1 min',
+    '300000':  'every 5 min',
+    '900000':  'every 15 min',
+    '1800000': 'every 30 min',
+    '3600000': 'every 1 hour'
+  }};
+
+  let timerId = null;
+  function applyPeriod(ms) {{
+    if (timerId) {{ clearTimeout(timerId); timerId = null; }}
+    if (footer) footer.textContent = LABELS[String(ms)] || 'off';
+    if (ms > 0) {{
+      timerId = setTimeout(function() {{
+        if (control) control.classList.add('spinning');
+        window.location.reload();
+      }}, ms);
+    }}
+  }}
+
+  const stored = window.localStorage.getItem(STORAGE_KEY);
+  if (stored !== null && LABELS[stored] !== undefined) {{
+    select.value = stored;
+  }}
+  applyPeriod(parseInt(select.value, 10) || 0);
+
+  select.addEventListener('change', function() {{
+    const ms = parseInt(select.value, 10) || 0;
+    try {{ window.localStorage.setItem(STORAGE_KEY, String(ms)); }} catch (e) {{}}
+    applyPeriod(ms);
   }});
 }})();
 </script>
@@ -1312,6 +2300,10 @@ def create_app(workspace: Path):
     def _api_eval_runs(limit: int = 24) -> JSONResponse:
         return JSONResponse(_load_eval_runs(workspace, limit=limit))
 
+    @app.get("/api/runs/{run_id}/report", response_class=HTMLResponse)
+    def _api_run_report(run_id: str) -> HTMLResponse:
+        return HTMLResponse(_render_run_report_html(workspace, run_id))
+
     @app.get("/api/telemetry")
     def _api_telemetry() -> JSONResponse:
         return JSONResponse(_telemetry_status())
@@ -1324,6 +2316,16 @@ def create_app(workspace: Path):
     ) -> JSONResponse:
         time_range = parse_time_range(range_, from_, to)
         return JSONResponse(_build_production_section(_telemetry_status(), time_range=time_range))
+
+    @app.get("/api/production/html", response_class=HTMLResponse)
+    def _api_production_html(
+        range_: Optional[str] = Query(None, alias="range"),
+        from_: Optional[str] = Query(None, alias="from"),
+        to: Optional[str] = Query(None),
+    ) -> HTMLResponse:
+        time_range = parse_time_range(range_, from_, to)
+        production = _build_production_section(_telemetry_status(), time_range=time_range)
+        return HTMLResponse(render_production_grid_html(production))
 
     @app.get("/healthz")
     def _healthz() -> Dict[str, str]:

@@ -242,7 +242,7 @@ def test_create_app_serves_dashboard(tmp_path: Path):
     r = client.get("/")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
-    assert "AgentOps dashboard" in r.text
+    assert "AgentOps Dashboard" in r.text
     # Range bar is present.
     assert "range-pills" in r.text
     assert 'range=1d' in r.text and 'range=7d' in r.text and 'range=30d' in r.text

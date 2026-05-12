@@ -994,21 +994,21 @@ def cmd_dashboard(
         raise typer.Exit(code=1) from exc
 
     import threading
+    import time as _time
+    import webbrowser
 
     from agentops.agent.dashboard import create_app as create_dashboard_app
 
     workspace = workspace.resolve()
     fastapi_app = create_dashboard_app(workspace=workspace)
+    url = f"http://{host}:{port}"
 
-    typer.echo(f"AgentOps dashboard → http://{host}:{port}")
+    typer.echo(f"AgentOps dashboard → {url}")
     typer.echo(f"workspace: {workspace}")
     typer.echo("Run `agentops agent analyze` in another terminal to populate watchdog findings.")
     typer.echo("")
     typer.echo("Press Enter (or Ctrl+C) to stop the dashboard.")
 
-    # Run uvicorn in a background thread so the foreground can wait on
-    # stdin and let the user stop the server by pressing Enter — friendlier
-    # than telling people to remember Ctrl+C.
     config = uvicorn.Config(
         fastapi_app, host=host, port=port, log_level="warning",
     )
@@ -1016,6 +1016,17 @@ def cmd_dashboard(
 
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
+
+    # Wait for uvicorn to actually bind before launching the browser so
+    # the first GET does not race the server startup.
+    for _ in range(40):  # up to ~2s
+        if getattr(server, "started", False):
+            break
+        _time.sleep(0.05)
+    try:
+        webbrowser.open(url, new=2)
+    except Exception:  # noqa: BLE001 — never fail dashboard on a browser launch issue
+        pass
 
     try:
         input()
