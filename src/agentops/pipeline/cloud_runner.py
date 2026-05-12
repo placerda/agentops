@@ -243,32 +243,37 @@ def run_on_foundry_cloud(
     progress(
         f"cloud: starting run for agent {agent_name}:{agent_version}"
     )
-    run_obj = openai_client.evals.runs.create(
-        eval_id=eval_id,
-        name=f"{eval_name}-run",
-        data_source={  # type: ignore[arg-type]
-            "type": "azure_ai_target_completions",
-            "source": source,
-            "input_messages": {
-                "type": "template",
-                "template": [
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": {
-                            "type": "input_text",
-                            "text": "{{item.input}}",
-                        },
-                    }
-                ],
+    try:
+        run_obj = openai_client.evals.runs.create(
+            eval_id=eval_id,
+            name=f"{eval_name}-run",
+            data_source={  # type: ignore[arg-type]
+                "type": "azure_ai_target_completions",
+                "source": source,
+                "input_messages": {
+                    "type": "template",
+                    "template": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": {
+                                "type": "input_text",
+                                "text": "{{item.input}}",
+                            },
+                        }
+                    ],
+                },
+                "target": {
+                    "type": "azure_ai_agent",
+                    "name": agent_name,
+                    "version": agent_version,
+                },
             },
-            "target": {
-                "type": "azure_ai_agent",
-                "name": agent_name,
-                "version": agent_version,
-            },
-        },
-    )
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _friendly_run_create_error(
+            exc, agent_name=agent_name, agent_version=agent_version
+        ) from exc
     run_id = run_obj.id
 
     progress(
@@ -493,6 +498,85 @@ def _poll_until_terminal(
         f"{max_attempts} polls of {interval_seconds:g}s "
         f"(last status: {last_status!r})."
     )
+
+
+def _friendly_run_create_error(
+    exc: Exception,
+    *,
+    agent_name: str,
+    agent_version: str,
+) -> Exception:
+    """Convert a noisy Foundry/OpenAI ``evals.runs.create`` failure into a
+    short, actionable ``RuntimeError``.
+
+    The Evals API returns the underlying validation message inside a
+    nested JSON envelope (``error.message`` →
+    ``Evaluation failed validation: {"Code": "ResourceNotFound", ...}``).
+    Rendering the raw exception dumps the whole envelope on stderr, which
+    is unreadable. We pick out the inner detail and rephrase it in the
+    common-case forms users actually hit.
+    """
+    raw = _extract_error_message(exc) or str(exc)
+    lowered = raw.lower()
+
+    if "was not found" in lowered or "resourcenotfound" in lowered:
+        return RuntimeError(
+            f"Agent '{agent_name}:{agent_version}' was not found in your "
+            "Foundry project.\n"
+            "  - Verify the name and version in target.endpoint.agent_id "
+            "(format: name:version).\n"
+            "  - Confirm AZURE_AI_FOUNDRY_PROJECT_ENDPOINT points to the "
+            "project that owns the agent.\n"
+            "  - Make sure the agent is deployed; list agents in the "
+            "Foundry portal under Agents."
+        )
+
+    if "permission" in lowered or "forbidden" in lowered or "403" in raw:
+        return RuntimeError(
+            "Foundry denied the evaluation request (permission).\n"
+            f"  - Confirm you have access to the project that owns "
+            f"agent '{agent_name}:{agent_version}'.\n"
+            "  - Try `az login` with the correct tenant or check the "
+            "managed identity assigned to this environment."
+        )
+
+    if "quota" in lowered or "ratelimit" in lowered or "429" in raw:
+        return RuntimeError(
+            "Foundry rate-limited the evaluation request. Retry in a "
+            "few minutes, or reduce dataset size."
+        )
+
+    return RuntimeError(f"Cloud evaluation could not start: {raw}")
+
+
+def _extract_error_message(exc: Exception) -> Optional[str]:
+    """Best-effort extraction of the human-readable message buried inside
+    an OpenAI / Azure SDK error.
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error") if isinstance(body.get("error"), dict) else body
+        if isinstance(err, dict):
+            msg = err.get("message")
+            if isinstance(msg, str) and msg:
+                inner = _strip_validation_envelope(msg)
+                return inner or msg
+    msg = getattr(exc, "message", None)
+    if isinstance(msg, str) and msg:
+        return _strip_validation_envelope(msg) or msg
+    return None
+
+
+def _strip_validation_envelope(text: str) -> Optional[str]:
+    """Pull the ``Message: ...`` line out of the validation envelope that
+    Foundry returns inside ``error.message``. Returns ``None`` if no such
+    line is present so callers can fall back to the original text.
+    """
+    for line in text.splitlines():
+        s = line.strip()
+        if s.lower().startswith("message:"):
+            return s.split(":", 1)[1].strip()
+    return None
 
 
 def _extract_report_url(run: Any) -> Optional[str]:
