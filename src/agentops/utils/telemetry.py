@@ -73,6 +73,15 @@ def init_tracing() -> None:
     if not appinsights_connection_string and not otlp_endpoint:
         return
 
+    # Opt into Azure's "experimental" GenAI tracing flag by default. This
+    # tells the OTel instrumentation to capture prompt + response content
+    # as span attributes (not just metadata), which is exactly what an
+    # eval / watchdog workflow needs to inspect a failing row in the
+    # Foundry portal. The flag is "experimental" only in the sense that
+    # Azure may change the underlying schema — not that it is unsafe.
+    # Users who want to opt out can set the env var to "false" explicitly.
+    os.environ.setdefault("AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING", "true")
+
     try:
         from opentelemetry import trace
     except ImportError:

@@ -320,6 +320,50 @@ def test_application_insights_connection_string_initializes_azure_monitor(
         "connection_string": "InstrumentationKey=00000000-0000-0000-0000-000000000000"
     }
     assert is_enabled() is True
+    # Default-on for GenAI tracing so the Azure SDK warning ("Set
+    # AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true …") is silenced and
+    # prompts/responses are captured as span attributes.
+    assert os.environ.get("AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING") == "true"
+
+
+def test_genai_tracing_env_var_not_overwritten_if_user_set_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """User-provided AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING wins."""
+    trace_module = types.ModuleType("opentelemetry.trace")
+    trace_module.get_tracer = lambda name: ("tracer", name)  # type: ignore[attr-defined]
+    opentelemetry_module = types.ModuleType("opentelemetry")
+    opentelemetry_module.trace = trace_module  # type: ignore[attr-defined]
+
+    azure_module = types.ModuleType("azure")
+    azure_monitor_module = types.ModuleType("azure.monitor")
+    azure_monitor_otel_module = types.ModuleType("azure.monitor.opentelemetry")
+    setattr(
+        azure_monitor_otel_module,
+        "configure_azure_monitor",
+        lambda **_: None,
+    )
+
+    monkeypatch.setitem(sys.modules, "opentelemetry", opentelemetry_module)
+    monkeypatch.setitem(sys.modules, "opentelemetry.trace", trace_module)
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", azure_monitor_module)
+    monkeypatch.setitem(
+        sys.modules, "azure.monitor.opentelemetry", azure_monitor_otel_module
+    )
+    monkeypatch.setattr(telemetry, "_tracer", None)
+    monkeypatch.setattr(telemetry, "_tracing_enabled", False)
+    monkeypatch.setenv(
+        "APPLICATIONINSIGHTS_CONNECTION_STRING",
+        "InstrumentationKey=test",
+    )
+    monkeypatch.setenv("AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING", "false")
+    monkeypatch.delenv("AGENTOPS_OTLP_ENDPOINT", raising=False)
+
+    init_tracing()
+
+    # User opt-out preserved.
+    assert os.environ["AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING"] == "false"
 
 
 def test_azure_monitor_queries_requests_and_dependencies(
