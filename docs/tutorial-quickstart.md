@@ -40,18 +40,30 @@ The former bundle-based, multi-file workspace has been replaced by this flat `ag
 
 ## 1. Install
 
+The AgentOps stack pulls a large dependency tree (Azure SDKs + the
+OpenTelemetry instrumentation libraries used by the dashboard's live
+production telemetry). Using **`uv`** instead of `pip` cuts the cold
+install from ~2 minutes to ~15 seconds — same flags, drop-in replacement.
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install -U uv
+uv pip install "agentops-toolkit[foundry,agent]"
+agentops --version
+```
+
+If you'd rather stay on `pip`, swap the last two lines for:
+
+```powershell
 python -m pip install -U pip
 python -m pip install --upgrade "agentops-toolkit[foundry,agent]"
-agentops --version
 ```
 
 The `[foundry]` extra brings the Azure SDKs the eval path needs;
 `[agent]` adds the FastAPI/uvicorn runtime used by `agentops dashboard`
-later in the tutorial. Installing both upfront avoids a second
-`pip install` later.
+later in the tutorial. Installing both upfront avoids a second install
+later.
 
 ## 2. Bootstrap the project
 

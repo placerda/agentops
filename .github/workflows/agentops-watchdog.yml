@@ -58,12 +58,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
       - name: Install AgentOps Toolkit (this branch)
         run: |
-          python -m pip install --upgrade pip
           # Use the in-tree code so this job stays in lockstep with the
           # template under src/agentops/templates/workflows/.
-          python -m pip install ".[foundry,agent]"
+          uv pip install --system ".[foundry,agent]"
 
       # First run has no prior artifact. Using `pattern:` instead of
       # `name:` makes actions/download-artifact return success with zero
