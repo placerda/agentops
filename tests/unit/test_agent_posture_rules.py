@@ -269,8 +269,11 @@ def test_run_posture_check_aggregates_rules() -> None:
     findings = run_posture_check(payload, PostureCheckConfig(enabled=True))
     ids = {f.id for f in findings}
     assert "waf.security.local_auth_disabled" in ids
-    assert "waf.security.public_network_access" in ids
     assert "waf.security.managed_identity" in ids
+    # Network + content-filter rules were retired from the registry —
+    # Foundry Operate -> Compliance covers them natively now.
+    assert "waf.security.public_network_access" not in ids
+    assert "waf.security.content_filter" not in ids
     assert all(f.category is Category.SECURITY for f in findings)
 
 
@@ -285,11 +288,13 @@ def test_run_posture_check_honours_excluded_rules() -> None:
     assert "waf.security.managed_identity" in ids
 
 
-def test_rule_registry_has_five_mvp_rules() -> None:
+def test_rule_registry_only_contains_complementary_rules() -> None:
+    """The active registry must only contain rules that Foundry's
+    Operate -> Compliance surface does NOT already provide. Content-filter
+    and public-network rules were retired for that reason.
+    """
     assert set(RULE_REGISTRY.keys()) == {
         "waf.security.local_auth_disabled",
-        "waf.security.public_network_access",
         "waf.security.managed_identity",
         "waf.security.diagnostic_settings",
-        "waf.security.content_filter",
     }

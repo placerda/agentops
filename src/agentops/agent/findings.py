@@ -14,16 +14,27 @@ class Category(str, Enum):
     grouping the watchdog report. They are independent of severity:
     a `quality` finding can be `critical`, `warning`, or `info`.
 
-    * ``quality``     — eval-driven signals (regression, content-safety)
-    * ``performance`` — latency / throughput signals
-    * ``reliability`` — error / failure signals
-    * ``security``    — Azure resource posture audits (WAF-AI Security pillar)
+    Categories are split between **runtime telemetry** signals (quality,
+    performance, reliability) and **GenAIOps practice** signals (mlops,
+    security, responsible_ai). The latter are the watchdog's main value
+    over Foundry's native Operate -> Compliance surface, which already
+    covers runtime guardrails, security posture, and data governance at
+    the resource level.
+
+    * ``quality``         — eval-driven signals (regression, content-safety)
+    * ``performance``     — latency / throughput signals
+    * ``reliability``     — error / failure signals
+    * ``mlops``           — pipeline / config hygiene (pinning, gates, drift)
+    * ``security``        — repo & identity surface beyond Foundry Compliance
+    * ``responsible_ai``  — prompt + eval-bundle heuristics for RAI practices
     """
 
     QUALITY = "quality"
     PERFORMANCE = "performance"
     RELIABILITY = "reliability"
+    MLOPS = "mlops"
     SECURITY = "security"
+    RESPONSIBLE_AI = "responsible_ai"
 
 
 class Severity(str, Enum):

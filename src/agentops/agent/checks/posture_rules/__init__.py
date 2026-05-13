@@ -26,9 +26,13 @@ RuleFn = Callable[[AzureResourcesPayload, str], List[Finding]]
 
 
 def _build_registry() -> Dict[str, RuleFn]:
-    from agentops.agent.checks.posture_rules.content_filter import (
-        evaluate as content_filter_rule,
-    )
+    # NOTE: two former rules (content_filter, network) were retired
+    # because Foundry's Operate -> Compliance surface now covers them
+    # natively (Guardrails tab + Security posture tab respectively).
+    # The watchdog's job in this area is the **complementary** half —
+    # runtime telemetry, identity scope, pipeline hygiene. The dropped
+    # rule modules are kept on disk so users with custom posture
+    # extensions importing them keep working.
     from agentops.agent.checks.posture_rules.diagnostics import (
         evaluate as diagnostics_rule,
     )
@@ -38,16 +42,11 @@ def _build_registry() -> Dict[str, RuleFn]:
     from agentops.agent.checks.posture_rules.managed_identity import (
         evaluate as managed_identity_rule,
     )
-    from agentops.agent.checks.posture_rules.network import (
-        evaluate as network_rule,
-    )
 
     return {
         "waf.security.local_auth_disabled": local_auth_rule,
-        "waf.security.public_network_access": network_rule,
         "waf.security.managed_identity": managed_identity_rule,
         "waf.security.diagnostic_settings": diagnostics_rule,
-        "waf.security.content_filter": content_filter_rule,
     }
 
 

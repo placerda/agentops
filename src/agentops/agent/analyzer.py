@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 from agentops.agent.checks.errors import run_errors_check
 from agentops.agent.checks.latency import run_latency_check
+from agentops.agent.checks.mlops import run_mlops_check
 from agentops.agent.checks.posture import run_posture_check
 from agentops.agent.checks.regression import run_regression_check
 from agentops.agent.checks.safety import run_safety_check
@@ -95,6 +96,7 @@ def analyze(
     findings.extend(run_errors_check(monitor, foundry, config.checks.errors))
     findings.extend(run_safety_check(history, config.checks.safety))
     findings.extend(run_posture_check(resources, posture_config))
+    findings.extend(run_mlops_check(workspace))
 
     allowed = _normalize_categories(categories)
     if allowed is not None:

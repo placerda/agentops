@@ -35,7 +35,9 @@ _CATEGORY_LABELS = {
     "quality": "Quality",
     "performance": "Performance",
     "reliability": "Reliability",
+    "mlops": "MLOps",
     "security": "Security",
+    "responsible_ai": "Responsible AI",
 }
 
 _BADGE_FOR_SEVERITY = {
