@@ -1512,13 +1512,12 @@ def _render_card(card: Dict[str, Any], *, hero: bool = False) -> str:
         f"{_html_escape(str(value))}</span>"
     )
 
-    meta_html = ""
-    if card.get("meta"):
-        meta_items = "".join(
-            f"<span>{_html_escape(m)}</span>" for m in card["meta"] if m
-        )
-        if meta_items:
-            meta_html = f'<div class="card-meta">{meta_items}</div>'
+    # Cards used to render a visible `card-meta` block under the sparkline
+    # (timestamp / duration / execution mode for the "Latest target" and
+    # "Latest run" cards). That block grew tall enough to push every card
+    # in the same row to match its height. Fold the meta lines into the
+    # help tooltip instead so the on-card layout stays uniform.
+    meta_lines = [m for m in (card.get("meta") or []) if m]
 
     # Hover detail shows the sparkline point's timestamp/label when present.
     hover_html = '<div class="hover-detail" data-default="">&nbsp;</div>'
@@ -1531,11 +1530,17 @@ def _render_card(card: Dict[str, Any], *, hero: bool = False) -> str:
         )
 
     help_html = ""
-    if card.get("help"):
+    help_text = card.get("help") or ""
+    if meta_lines:
+        # Bullet the meta lines so they read as "more facts about this
+        # card" rather than running on with the help prose.
+        bullets = "\n".join(f"• {m}" for m in meta_lines)
+        help_text = f"{help_text}\n\n{bullets}" if help_text else bullets
+    if help_text:
         help_html = (
             '<span class="card-help" tabindex="0" aria-label="About this card">'
             '<span class="card-help-icon" aria-hidden="true">i</span>'
-            f'<span class="card-help-tooltip" role="tooltip">{_html_escape(card["help"])}</span>'
+            f'<span class="card-help-tooltip" role="tooltip">{_html_escape(help_text)}</span>'
             '</span>'
         )
 
@@ -1546,7 +1551,6 @@ def _render_card(card: Dict[str, Any], *, hero: bool = False) -> str:
         f'<div class="{value_css}">{value_inner}{unit_html}</div>'
         f"{spark}"
         f"{hover_html}"
-        f"{meta_html}"
         f'<div class="badge-row">'
         f'<div class="badge tone-{badge["tone"]}">{_html_escape(badge["label"])}</div>'
         f'</div>'
