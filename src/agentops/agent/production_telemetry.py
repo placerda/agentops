@@ -155,10 +155,19 @@ dependencies
     customDimensions["gen_ai.usage.output_tokens"],
     customDimensions["llm.usage.output_tokens"]
   ))
+| extend model_name = tostring(coalesce(
+    customDimensions["gen_ai.request.model"],
+    customDimensions["gen_ai.response.model"],
+    customDimensions["llm.request.model"],
+    customDimensions["llm.response.model"],
+    "unknown"
+  ))
 | where isnotnull(input_t) or isnotnull(output_t)
 | summarize
     input_tokens = sum(input_t),
     output_tokens = sum(output_t)
+    by model_name
+| order by (input_tokens + output_tokens) desc
 """
 
 
@@ -318,25 +327,57 @@ def _build_cards(
 
     token_rows = (tokens or {}).get("rows") or []
     if token_rows:
-        trow = token_rows[0]
-        input_t = int(trow.get("input_tokens") or 0)
-        output_t = int(trow.get("output_tokens") or 0)
-        total = input_t + output_t
+        # token_rows now arrives one entry per model (gen_ai.request.model).
+        # Aggregate a grand total for the headline and keep the per-model
+        # breakdown for the tooltip so users with multiple deployments can
+        # still see which model drives the spend.
+        per_model: List[Tuple[str, int, int]] = []
+        total_in = 0
+        total_out = 0
+        for trow in token_rows:
+            name = str(trow.get("model_name") or "unknown")
+            i_t = int(trow.get("input_tokens") or 0)
+            o_t = int(trow.get("output_tokens") or 0)
+            total_in += i_t
+            total_out += o_t
+            per_model.append((name, i_t, o_t))
+
+        total = total_in + total_out
+        n_models = len(per_model)
+        unit = f"{_format_tokens(total_in)} in / {_format_tokens(total_out)} out"
+        if n_models > 1:
+            unit = f"{unit} · across {n_models} models"
+
+        breakdown_lines = [
+            f"{name}: {_format_tokens(i_t)} in / {_format_tokens(o_t)} out"
+            for name, i_t, o_t in per_model
+        ]
+
+        help_text = (
+            "Total prompt and completion tokens reported by the model via "
+            "gen_ai.usage.input_tokens and gen_ai.usage.output_tokens. "
+            "When several model deployments emit telemetry into the same "
+            "App Insights resource, the headline aggregates them all."
+        )
+        if n_models > 1:
+            help_text += "\n\nPer-model breakdown:\n" + "\n".join(
+                f"• {line}" for line in breakdown_lines
+            )
+
         cards.append({
             "key": "prod_tokens",
             "label": f"Tokens ({window_label})",
             "value": _format_tokens(total),
-            "unit": f"{_format_tokens(input_t)} in / {_format_tokens(output_t)} out",
+            "unit": unit,
             "value_kind": "text",
             "series": [float(total)],
-            "labels": [f"input: {input_t} · output: {output_t}"],
+            "labels": [f"input: {total_in} · output: {total_out}"],
             "badge": {"label": "live", "tone": "info"},
-            "help": (
-                "Total prompt and completion tokens reported by the "
-                "model via gen_ai.usage.input_tokens and "
-                "gen_ai.usage.output_tokens custom dimensions."
+            "help": help_text,
+            "source": (
+                "Total prompt and completion tokens reported by the model"
+                + (f" across {n_models} deployments." if n_models > 1 else ".")
             ),
-            "source": "Total prompt and completion tokens reported by the model.",
         })
 
     return cards

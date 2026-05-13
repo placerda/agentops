@@ -68,6 +68,41 @@ def test_build_cards_empty_when_no_summary_rows():
     assert cards == []
 
 
+def test_build_cards_tokens_per_model_breakdown():
+    """When multiple models contribute, the Tokens card aggregates the
+    total and surfaces a per-model bullet list in the help tooltip."""
+    summary = {"rows": [{"invocations": 10, "errors": 0, "avg_ms": 100, "p95_ms": 500}]}
+    tokens = {"rows": [
+        {"model_name": "gpt-4o-mini", "input_tokens": 12000, "output_tokens": 4000},
+        {"model_name": "text-embedding-3-small", "input_tokens": 8000, "output_tokens": 0},
+    ]}
+    cards = _build_cards(summary, {}, {}, tokens)
+    tok = next(c for c in cards if c["key"] == "prod_tokens")
+
+    # Grand total = 12000 + 4000 + 8000 + 0 = 24000 → "24.0k"
+    assert tok["value"] == "24.0k"
+    # Unit mentions both the in/out split and how many models contributed.
+    assert "across 2 models" in tok["unit"]
+    # Per-model breakdown lives in the help text as bullets.
+    assert "gpt-4o-mini" in tok["help"]
+    assert "text-embedding-3-small" in tok["help"]
+    assert "Per-model breakdown" in tok["help"]
+    # Source footer mentions aggregation across deployments.
+    assert "across 2 deployments" in tok["source"]
+
+
+def test_build_cards_tokens_single_model_no_breakdown():
+    """A single-model deployment should not emit a per-model bullet list."""
+    summary = {"rows": [{"invocations": 5, "errors": 0, "avg_ms": 100, "p95_ms": 500}]}
+    tokens = {"rows": [
+        {"model_name": "gpt-4o-mini", "input_tokens": 1000, "output_tokens": 500},
+    ]}
+    cards = _build_cards(summary, {}, {}, tokens)
+    tok = next(c for c in cards if c["key"] == "prod_tokens")
+    assert "across" not in tok["unit"]
+    assert "Per-model breakdown" not in tok["help"]
+
+
 def test_error_rate_badge_thresholds():
     # 0 errors -> healthy
     cards = _build_cards(
