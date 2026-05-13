@@ -216,10 +216,24 @@ def test_html_includes_all_sections_when_data_present(tmp_path: Path):
     payload = build_dashboard_payload(tmp_path, time_range=_WIDE)
     html = render_dashboard_html(payload)
     assert "Evaluation runs" in html
+    assert "Deployments" in html
     assert "Quality metrics" in html
     assert "Watchdog findings" in html
     assert "Telemetry" in html
     assert "<svg" in html
+
+    # All five sections are wrapped in collapsible <details> blocks that
+    # default to open, in the documented order: eval → deployments →
+    # quality metrics → watchdog → production.
+    eval_pos = html.find('<span class="section-title-text">Evaluation runs')
+    deploy_pos = html.find('<span class="section-title-text">Deployments')
+    metrics_pos = html.find('<span class="section-title-text">Quality metrics')
+    watchdog_pos = html.find('<span class="section-title-text">Watchdog findings')
+    assert eval_pos != -1 and deploy_pos != -1
+    assert metrics_pos != -1 and watchdog_pos != -1
+    assert eval_pos < deploy_pos < metrics_pos < watchdog_pos
+    assert '<details class="section-block" open>' in html
+
 
 
 def test_create_app_serves_dashboard(tmp_path: Path):

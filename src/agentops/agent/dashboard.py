@@ -100,6 +100,7 @@ def build_dashboard_payload(
         "eval": _build_eval_section(eval_runs),
         "metrics": _build_metrics_cards(eval_runs),
         "watchdog": _build_watchdog_section(records),
+        "deployments": _build_deployments_section(workspace, time_range),
         "summary_counts": {
             "eval_runs": len(eval_runs),
             "analyses": len(records),
@@ -467,6 +468,233 @@ def _label_for_record(record: AnalysisRecord) -> str:
     """Short timestamp label for a watchdog sparkline point."""
     ts = record.timestamp or ""
     return ts[:16].replace("T", " ") if isinstance(ts, str) else "—"
+
+
+# ---------------------------------------------------------------------------
+# Deployments (GitHub Actions workflow runs)
+# ---------------------------------------------------------------------------
+
+
+# Cached `gh run list` payload, keyed by workspace. Keeps the dashboard
+# snappy on refresh while still picking up new runs within the TTL.
+_DEPLOYMENTS_CACHE_TTL_SECONDS = 60.0
+_deployments_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+
+
+def _build_deployments_section(
+    workspace: Path,
+    time_range: TimeRange,
+) -> Dict[str, Any]:
+    """Project recent GitHub Actions runs into the dashboard card shape.
+
+    Uses the local ``gh`` CLI to list workflow runs for the repo that
+    contains the workspace. When ``gh`` is not installed, the user is
+    not authenticated, or the workspace is not inside a GitHub repo, we
+    return an empty-state payload that lets the renderer point the user
+    at the right command.
+    """
+    if shutil.which("gh") is None:
+        return {
+            "has_data": False,
+            "reason": "gh-missing",
+            "hint": (
+                "Install the GitHub CLI (https://cli.github.com) and run "
+                "<code>gh auth login</code> to surface workflow runs here."
+            ),
+            "cards": [],
+        }
+
+    runs = _fetch_workflow_runs(workspace)
+    if runs is None:
+        return {
+            "has_data": False,
+            "reason": "gh-failed",
+            "hint": (
+                "Could not list workflow runs. Confirm <code>gh auth status</code> "
+                "passes from this workspace and that the repo has GitHub Actions enabled."
+            ),
+            "cards": [],
+        }
+
+    runs = _filter_workflow_runs(runs, time_range)
+    if not runs:
+        return {
+            "has_data": False,
+            "reason": "no-runs",
+            "hint": (
+                "No workflow runs in the selected window. Run "
+                "<code>agentops workflow generate</code> to scaffold one, "
+                "then trigger it on a PR."
+            ),
+            "cards": [],
+        }
+
+    runs = list(reversed(runs))  # oldest → newest for sparkline left-to-right
+
+    total = len(runs)
+    successes = sum(1 for r in runs if (r.get("conclusion") or "").lower() == "success")
+    success_rate = successes / total if total else 0.0
+    pass_series = [1.0 if (r.get("conclusion") or "").lower() == "success" else 0.0 for r in runs]
+    run_labels = [_label_for_workflow_run(r) for r in runs]
+    run_links = [r.get("url") for r in runs]
+
+    latest = runs[-1]
+    latest_conclusion = (latest.get("conclusion") or latest.get("status") or "—").lower()
+    latest_label = latest.get("workflowName") or latest.get("name") or "—"
+
+    cards: List[Dict[str, Any]] = [
+        {
+            "key": "workflow_runs",
+            "label": "Workflow runs",
+            "value": total,
+            "unit": "total",
+            "series": [1.0] * total,
+            "labels": run_labels,
+            "links": run_links,
+            "badge": {"label": _badge_runs_label(total), "tone": "info"},
+            "help": (
+                "Recent GitHub Actions runs in this repo, fetched via "
+                "<code>gh run list</code>. Hover the sparkline to see the "
+                "workflow name and conclusion; click a dot to open the "
+                "run in GitHub."
+            ),
+            "source": "gh run list",
+        },
+        {
+            "key": "success_rate",
+            "label": "Success rate",
+            "value": f"{int(success_rate * 100)}%",
+            "unit": "",
+            "series": pass_series,
+            "labels": [
+                f"{_label_for_workflow_run(r)} · {(r.get('conclusion') or r.get('status') or '—')}"
+                for r in runs
+            ],
+            "links": run_links,
+            "badge": _success_rate_badge(success_rate),
+            "help": (
+                "Share of recent workflow runs that finished with "
+                "conclusion <code>success</code>. Failed, cancelled, and "
+                "skipped runs all count against this rate."
+                "\n\nBadge tiers:"
+                "\n• 90% or above — healthy"
+                "\n• 70 to 89% — mixed"
+                "\n• below 70% — unhealthy"
+            ),
+            "source": "gh run list · conclusion",
+        },
+        {
+            "key": "latest_workflow",
+            "label": "Latest run",
+            "value": latest_label,
+            "unit": "",
+            "value_kind": "text",
+            "series": pass_series[-6:],
+            "labels": run_labels[-6:],
+            "links": run_links[-6:],
+            "badge": _workflow_conclusion_badge(latest_conclusion),
+            "help": (
+                "The most recent GitHub Actions run for this repo. "
+                "Click the card's sparkline dots to open the corresponding "
+                "run in GitHub."
+            ),
+            "meta": [
+                _format_iso_timestamp(latest.get("createdAt") or ""),
+                f"branch: {latest.get('headBranch') or '—'}",
+                f"event: {latest.get('event') or '—'}",
+            ],
+            "source": "gh run list · latest",
+            "alt_link": latest.get("url"),
+            "alt_label": "Open in GitHub",
+        },
+    ]
+
+    return {"has_data": True, "cards": cards}
+
+
+def _fetch_workflow_runs(workspace: Path) -> Optional[List[Dict[str, Any]]]:
+    """Return up to 50 recent workflow runs via ``gh``. Cached for 60s."""
+    import time
+    key = str(workspace.resolve())
+    now = time.time()
+    cached = _deployments_cache.get(key)
+    if cached and now - cached[0] < _DEPLOYMENTS_CACHE_TTL_SECONDS:
+        return cached[1]
+    try:
+        proc = subprocess.run(
+            [
+                "gh", "run", "list",
+                "--limit", "50",
+                "--json", "conclusion,status,createdAt,name,displayTitle,url,headBranch,event,workflowName",
+            ],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        runs = json.loads(proc.stdout or "[]")
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(runs, list):
+        return None
+    _deployments_cache[key] = (now, runs)
+    return runs
+
+
+def _filter_workflow_runs(
+    runs: List[Dict[str, Any]],
+    time_range: TimeRange,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for r in runs:
+        ts = _parse_iso(r.get("createdAt"))
+        if time_range.contains(ts):
+            out.append(r)
+    return out
+
+
+def _label_for_workflow_run(run: Dict[str, Any]) -> str:
+    name = run.get("workflowName") or run.get("name") or "workflow"
+    ts = run.get("createdAt") or ""
+    short_ts = ts[:16].replace("T", " ") if isinstance(ts, str) else ""
+    return f"{name} · {short_ts}".strip(" ·")
+
+
+def _badge_runs_label(count: int) -> str:
+    if count == 0:
+        return "no runs"
+    if count < 5:
+        return "few runs"
+    if count < 20:
+        return "active"
+    return "very active"
+
+
+def _success_rate_badge(rate: float) -> Dict[str, str]:
+    if rate >= 0.9:
+        return {"label": "healthy", "tone": "ok"}
+    if rate >= 0.7:
+        return {"label": "mixed", "tone": "warn"}
+    return {"label": "unhealthy", "tone": "crit"}
+
+
+def _workflow_conclusion_badge(conclusion: str) -> Dict[str, str]:
+    c = (conclusion or "").lower()
+    if c == "success":
+        return {"label": "passed", "tone": "ok"}
+    if c in ("failure", "timed_out", "startup_failure"):
+        return {"label": c.replace("_", " "), "tone": "crit"}
+    if c == "cancelled":
+        return {"label": "cancelled", "tone": "warn"}
+    if c in ("in_progress", "queued", "waiting", "requested", "pending"):
+        return {"label": c.replace("_", " "), "tone": "info"}
+    return {"label": c or "—", "tone": "muted"}
 
 
 # ---------------------------------------------------------------------------
@@ -1431,6 +1659,24 @@ def _foundry_logo_data_uri() -> Optional[str]:
         return None
 
 
+def _collapsible_section(title_inner_html: str, body_html: str) -> str:
+    """Wrap a dashboard section in a collapsible ``<details>`` block.
+
+    All sections are expanded by default so the dashboard reads the same
+    on first load; the chevron in the summary lets users hide noisy
+    sections (e.g. production telemetry on a stale workspace).
+    """
+    return (
+        '<details class="section-block" open>'
+        '<summary class="section-summary">'
+        '<span class="section-chevron" aria-hidden="true">&#x25BE;</span>'
+        f'<span class="section-title-text">{title_inner_html}</span>'
+        '</summary>'
+        f'<div class="section-body">{body_html}</div>'
+        '</details>'
+    )
+
+
 def render_dashboard_html(payload: Dict[str, Any]) -> str:
     """Render the dashboard from a payload built by
     :func:`build_dashboard_payload`. Returns a complete HTML document.
@@ -1449,19 +1695,31 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
         exec_tag = _render_exec_section_tag(
             payload["eval"].get("latest_execution"),
         )
-        eval_section = (
-            f'<div class="section-title">Evaluation runs{exec_tag}</div>'
-            f'<div class="grid">{cards_html}{telemetry_card}</div>'
+        eval_body = f'<div class="grid">{cards_html}{telemetry_card}</div>'
+        eval_section = _collapsible_section(
+            f"Evaluation runs{exec_tag}", eval_body,
         )
     else:
-        eval_section = (
-            '<div class="section-title">Evaluation runs</div>'
+        eval_body = (
             '<div class="empty-state">'
             "No eval runs yet under <code>.agentops/results/</code>. "
             "Run <code>agentops eval run</code> to populate this section."
             "</div>"
             + (f'<div class="grid">{telemetry_card}</div>' if telemetry_card else "")
         )
+        eval_section = _collapsible_section("Evaluation runs", eval_body)
+
+    deployments = payload.get("deployments") or {}
+    if deployments.get("has_data") and deployments.get("cards"):
+        deploy_cards = "".join(_render_card(c) for c in deployments["cards"])
+        deployments_body = f'<div class="grid">{deploy_cards}</div>'
+    else:
+        hint = deployments.get("hint") or (
+            "Install the GitHub CLI and run <code>gh auth login</code> "
+            "to surface workflow runs here."
+        )
+        deployments_body = f'<div class="empty-state">{hint}</div>'
+    deployments_section = _collapsible_section("Deployments", deployments_body)
 
     metrics_section = ""
     if payload["metrics"]:
@@ -1469,10 +1727,32 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
         exec_tag = _render_exec_section_tag(
             payload["eval"].get("latest_execution") if payload["eval"].get("has_runs") else None,
         )
-        metrics_section = (
-            f'<div class="section-title">Quality metrics{exec_tag}</div>'
-            f'<div class="grid">{metrics_html}</div>'
+        metrics_body = f'<div class="grid">{metrics_html}</div>'
+        metrics_section = _collapsible_section(
+            f"Quality metrics{exec_tag}", metrics_body,
         )
+
+    watchdog = payload["watchdog"]
+    if watchdog["has_history"]:
+        watchdog_headline = "".join(
+            _render_card(c, hero=True) for c in watchdog["headline_cards"]
+        )
+        watchdog_categories = "".join(
+            _render_card(c) for c in watchdog["category_cards"]
+        )
+        watchdog_body = (
+            f'<div class="grid">{watchdog_headline}</div>'
+            '<div class="section-title sub">By category</div>'
+            f'<div class="grid">{watchdog_categories}</div>'
+        )
+    else:
+        watchdog_body = (
+            '<div class="empty-state">'
+            "No analysis history yet. Run "
+            "<code>agentops agent analyze</code> to populate this section."
+            "</div>"
+        )
+    watchdog_section = _collapsible_section("Watchdog findings", watchdog_body)
 
     production = payload.get("production") or {}
     production_section = ""
@@ -1485,16 +1765,17 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
             f'View in App Insights →</a>'
         )
 
+    prod_title = (
+        'Production telemetry'
+        ' <span class="live-pill">live · App Insights</span>'
+        f'{portal_link}'
+    )
     if production.get("has_data") and production.get("cards"):
         # Server-side render (rare — happens when /api/production/html is
         # invoked directly without a deferred placeholder).
         prod_html = "".join(_render_card(c, hero=True) for c in production["cards"])
-        production_section = (
-            '<div class="section-title">Production telemetry'
-            ' <span class="live-pill">live · App Insights</span>'
-            f'{portal_link}</div>'
-            f'<div class="grid" id="production-grid">{prod_html}</div>'
-        )
+        prod_body = f'<div class="grid" id="production-grid">{prod_html}</div>'
+        production_section = _collapsible_section(prod_title, prod_body)
     elif production.get("deferred"):
         # Telemetry is wired up; the cards will arrive async from
         # /api/production/html so the page can render immediately.
@@ -1513,35 +1794,8 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
             )
             for label in skeleton_labels
         )
-        production_section = (
-            '<div class="section-title">Production telemetry'
-            ' <span class="live-pill">live · App Insights</span>'
-            f'{portal_link}</div>'
-            f'<div class="grid" id="production-grid">{skeleton_cards}</div>'
-        )
-
-    watchdog = payload["watchdog"]
-    if watchdog["has_history"]:
-        watchdog_headline = "".join(
-            _render_card(c, hero=True) for c in watchdog["headline_cards"]
-        )
-        watchdog_categories = "".join(
-            _render_card(c) for c in watchdog["category_cards"]
-        )
-        watchdog_section = (
-            '<div class="section-title">Watchdog findings</div>'
-            f'<div class="grid">{watchdog_headline}</div>'
-            '<div class="section-title sub">By category</div>'
-            f'<div class="grid">{watchdog_categories}</div>'
-        )
-    else:
-        watchdog_section = (
-            '<div class="section-title">Watchdog findings</div>'
-            '<div class="empty-state">'
-            "No analysis history yet. Run "
-            "<code>agentops agent analyze</code> to populate this section."
-            "</div>"
-        )
+        prod_body = f'<div class="grid" id="production-grid">{skeleton_cards}</div>'
+        production_section = _collapsible_section(prod_title, prod_body)
 
     counts = payload["summary_counts"]
     workspace_display = _shorten_workspace(payload["workspace"])
@@ -1568,6 +1822,7 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
 
     return _DASHBOARD_TEMPLATE.format(
         eval_section=eval_section,
+        deployments_section=deployments_section,
         metrics_section=metrics_section,
         production_section=production_section,
         watchdog_section=watchdog_section,
@@ -1747,6 +2002,60 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
   }}
   .section-title.sub {{
     margin-top: 18px; font-size: 11px;
+  }}
+  /* Collapsible section wrapper: <details><summary>title</summary>body</details>. */
+  .section-block {{
+    margin: 32px 0 0;
+  }}
+  .section-block + .section-block {{
+    margin-top: 24px;
+  }}
+  .section-block > summary.section-summary {{
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    user-select: none;
+    color: var(--text-faint);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    margin-bottom: 14px;
+    transition: color 120ms ease;
+  }}
+  .section-block > summary.section-summary::-webkit-details-marker {{
+    display: none;
+  }}
+  .section-block > summary.section-summary:hover {{
+    color: var(--text-dim);
+  }}
+  .section-chevron {{
+    display: inline-block;
+    color: var(--text-faint);
+    font-size: 14px;
+    line-height: 1;
+    transition: transform 150ms ease;
+  }}
+  .section-block:not([open]) > summary.section-summary .section-chevron {{
+    transform: rotate(-90deg);
+  }}
+  .section-title-text {{
+    /* Reuse existing inline elements (exec tag, live pill, section link)
+       inside the title without forcing them to inherit summary casing. */
+    text-transform: uppercase;
+  }}
+  .section-title-text .section-exec-tag,
+  .section-title-text .live-pill,
+  .section-title-text .section-link {{
+    text-transform: none;
+    letter-spacing: 0;
+  }}
+  .section-body {{
+    /* Body is just the cards grid + any sub-titles; no extra padding. */
   }}
   .live-pill {{
     display: inline-block; margin-left: 8px;
@@ -2135,9 +2444,10 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
 <div class="range-current">window: {range_label}</div>
 
 {eval_section}
-{production_section}
+{deployments_section}
 {metrics_section}
 {watchdog_section}
+{production_section}
 
 <footer>Auto-refresh: <span id="refreshFooter">every 5 min</span> · <code>agentops dashboard</code></footer>
 
