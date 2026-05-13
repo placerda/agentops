@@ -462,6 +462,141 @@ The `agentops-workflow` Copilot skill walks you through the rest
 (environments, Azure auth, branch protection / approvals) when you're
 ready to push the workflows to your repo.
 
+## 10. Wire the workflows to Azure via OIDC
+
+The workflows expect six environment variables (`AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
+`AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`, `AZURE_OPENAI_ENDPOINT`,
+`AZURE_OPENAI_DEPLOYMENT`) per GitHub Environment, and they
+authenticate to Azure via **OpenID Connect** — no long-lived secret
+sits in the repo. This section walks the full setup end-to-end.
+
+Substitute your own values for `<repo>` (e.g.
+`agentops-quickstart-MMDDYYHHMM`) and `<owner>` (your GitHub login)
+below.
+
+### 10.1 Push the repo to GitHub
+
+```powershell
+git init -b main
+git add .
+git commit -m "initial: AgentOps quickstart workspace + CI workflows"
+gh repo create "<owner>/<repo>" --private --source=.
+git push -u origin main
+git checkout -b develop && git push -u origin develop && git checkout main
+```
+
+`develop` is the integration branch the PR gate runs against. `main`
+is the prod-deploy trigger.
+
+### 10.2 Create the Azure AD app registration
+
+The CI service principal needs to exist in the same tenant `azd`/`az`
+is logged into. Confirm with `az account show --query tenantId`.
+
+```powershell
+$APP_NAME = "<repo>"        # reuse the GitHub repo name for clarity
+az ad app create --display-name $APP_NAME --sign-in-audience AzureADMyOrg
+az ad sp create --id (az ad app list --display-name $APP_NAME --query "[0].appId" -o tsv)
+```
+
+Capture the app's `appId` (client ID) and the service principal's
+`objectId`; the next steps reference them.
+
+### 10.3 Configure federated credentials (one per environment)
+
+This is the OIDC trust: GitHub Actions tokens issued for these
+subjects can request Azure tokens for this app, with no shared secret.
+
+Repeat the block below for each environment (`dev`, `qa`,
+`production`) and once more for `pull_request`:
+
+```powershell
+$APP_OBJ_ID = (az ad app list --display-name $APP_NAME --query "[0].id" -o tsv)
+$BODY = @{
+  name      = "github-<repo>-env-dev"
+  issuer    = "https://token.actions.githubusercontent.com"
+  subject   = "repo:<owner>/<repo>:environment:dev"
+  audiences = @("api://AzureADTokenExchange")
+} | ConvertTo-Json -Depth 5
+$BODY | az ad app federated-credential create --id $APP_OBJ_ID --parameters "@-"
+```
+
+For PR-only triggers (no environment binding) use
+`subject = "repo:<owner>/<repo>:pull_request"`.
+
+### 10.4 Grant the service principal Azure roles
+
+Three role assignments cover the cloud-eval path. Adjust scopes if you
+target a different Foundry account.
+
+```powershell
+$SP_ID    = (az ad sp list --display-name $APP_NAME --query "[0].id" -o tsv)
+$SCOPE_FN = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.CognitiveServices/accounts/<foundry-account>"
+$SCOPE_SUB = "/subscriptions/<sub>"
+
+az role assignment create --assignee-object-id $SP_ID --assignee-principal-type ServicePrincipal `
+  --role "Cognitive Services User" --scope $SCOPE_FN
+az role assignment create --assignee-object-id $SP_ID --assignee-principal-type ServicePrincipal `
+  --role "Azure AI Developer"      --scope $SCOPE_FN
+az role assignment create --assignee-object-id $SP_ID --assignee-principal-type ServicePrincipal `
+  --role "Reader"                  --scope $SCOPE_SUB
+```
+
+Why these three:
+
+| Role | Scope | Why |
+|---|---|---|
+| `Cognitive Services User` | Foundry account | Invoke the agent + call the Evals API |
+| `Azure AI Developer` | Foundry account | Read/write agents and evaluation runs in the project |
+| `Reader` | Subscription | Read resource metadata for auto-discovery (App Insights, deployments) |
+
+### 10.5 Create the GitHub environments + variables
+
+The workflows read `vars.*` from the GitHub Environment that the job
+is bound to. Create the three environments and seed the variables on
+each:
+
+```powershell
+foreach ($env in @("dev","qa","production")) {
+  gh api -X PUT "/repos/<owner>/<repo>/environments/$env" --silent
+}
+
+$vars = @{
+  AZURE_CLIENT_ID                   = "<app-id>"
+  AZURE_TENANT_ID                   = "<tenant-id>"
+  AZURE_SUBSCRIPTION_ID             = "<sub-id>"
+  AZURE_AI_FOUNDRY_PROJECT_ENDPOINT = "https://<account>.services.ai.azure.com/api/projects/<project>"
+  AZURE_OPENAI_ENDPOINT             = "https://<account>.openai.azure.com/"
+  AZURE_OPENAI_DEPLOYMENT           = "gpt-4o-mini"
+}
+foreach ($env in @("dev","qa","production")) {
+  foreach ($k in $vars.Keys) {
+    $body = @{ name=$k; value=$vars[$k] } | ConvertTo-Json -Compress
+    $body | gh api -X POST "/repos/<owner>/<repo>/environments/$env/variables" --input - --silent
+  }
+}
+```
+
+Production should also have **required reviewers**: open
+`Settings → Environments → production` in the GitHub UI and add at
+least one human approver.
+
+### 10.6 Validate end-to-end
+
+Trigger the PR gate manually to confirm the OIDC chain works:
+
+```powershell
+gh workflow run "agentops-pr.yml" --ref main
+gh run watch
+```
+
+The expected output is `Threshold status: PASSED` followed by
+`exit code 0`. If you see `failed to load agentops.yaml` validation
+errors, the CI installed an older AgentOps build than your local one
+— pin the install to a specific tag in the workflow's
+`pip install` step.
+
 ## Where evaluators come from
 
 You did not pick evaluators — AgentOps inferred them:
