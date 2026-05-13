@@ -85,6 +85,7 @@ def build_dashboard_payload(
     return {
         "workspace": str(workspace.resolve()),
         "foundry_project_url": _resolve_foundry_project_url(workspace),
+        "foundry_compliance_url": _resolve_foundry_compliance_url(workspace),
         "foundry_setup_url": _foundry_setup_url(),
         "az_tenant_id": _az_tenant_id(),
         "time_range": {
@@ -374,32 +375,22 @@ def _build_watchdog_section(records: List[AnalysisRecord]) -> Dict[str, Any]:
     critical_series = _series(lambda r: r.findings_by_severity.get("critical", 0))
     record_labels = [_label_for_record(r) for r in records]
 
-    category_cards: List[Dict[str, Any]] = []
-    for key, label in _CATEGORY_LABELS.items():
-        series = _series(lambda r, k=key: r.findings_by_category.get(k, 0))
-        current = int(series[-1]) if series else 0
-        labels = [
-            f"{_label_for_record(r)} · {int(r.findings_by_category.get(key, 0))} finding(s)"
-            for r in records
-        ]
-        category_cards.append({
-            "key": key,
-            "label": label,
-            "value": current,
-            "unit": "",
-            "series": series,
-            "labels": labels,
-            "badge": _category_badge(key, current, records),
-            "help": (
-                f"Findings in the {label.lower()} category across all "
-                "recorded analyses. The trend line shows how this count "
-                "has moved over time. Badge reflects whether the latest "
-                "value is an improvement or a regression."
-            ),
-            "source": f"{label} findings recorded by the watchdog across this window.",
-        })
-
     latest_label, latest_badge = _latest_run_badge(latest)
+
+    # Latest findings list. We project the dict directly from the
+    # AnalysisRecord (which stores the same Finding.to_dict() payload
+    # the watchdog produced) and sort by severity desc → category →
+    # title so the most urgent items render first.
+    latest_findings: List[Dict[str, Any]] = []
+    if latest and latest.findings:
+        latest_findings = sorted(
+            latest.findings,
+            key=lambda f: (
+                -_SEVERITY_SORT_RANK.get(str(f.get("severity") or "").lower(), -1),
+                str(f.get("category") or ""),
+                str(f.get("title") or ""),
+            ),
+        )
 
     return {
         "has_history": bool(records),
@@ -459,8 +450,16 @@ def _build_watchdog_section(records: List[AnalysisRecord]) -> Dict[str, Any]:
                 "source": "When the most recent watchdog analysis finished.",
             },
         ],
-        "category_cards": category_cards,
+        "latest_findings": latest_findings,
     }
+
+
+# Severity rank used to sort the findings list (highest severity first).
+_SEVERITY_SORT_RANK = {
+    "critical": 2,
+    "warning": 1,
+    "info": 0,
+}
 
 
 def _label_for_record(record: AnalysisRecord) -> str:
@@ -961,30 +960,57 @@ def _resolve_foundry_project_url(workspace: Path) -> Optional[str]:
     user on a "wrong tenant" page when their browser's session is in a
     different directory.
     """
+    base = _resolve_foundry_project_root(workspace)
+    if base is None:
+        return _with_tenant("https://ai.azure.com")
+    return _with_tenant(base + "/build/agents")
+
+
+def _resolve_foundry_compliance_url(workspace: Path) -> Optional[str]:
+    """Return the Foundry > Operate > Compliance deep-link for this project.
+
+    Resolves the same way as the project URL but lands on the Operate >
+    Compliance surface so users can click straight from the watchdog
+    section header into the page that owns runtime guardrails,
+    security posture, and data governance.
+    """
+    base = _resolve_foundry_project_root(workspace)
+    if base is None:
+        return None
+    return _with_tenant(base + "/operate/compliance")
+
+
+def _resolve_foundry_project_root(workspace: Path) -> Optional[str]:
+    """Pull the project-root prefix (everything before ``/build/...``) out
+    of the most recent cloud_evaluation.json. Returns ``None`` when there
+    is no cloud run yet — callers fall back to defaults or hide the link.
+    """
     results_root = workspace / ".agentops" / "results"
-    if results_root.is_dir():
-        candidates: List[Tuple[str, Path]] = []
-        for entry in results_root.iterdir():
-            if not entry.is_dir() or entry.name == "latest":
-                continue
-            meta = entry / "cloud_evaluation.json"
-            if meta.exists():
-                candidates.append((entry.name, meta))
-        candidates.sort(key=lambda kv: kv[0], reverse=True)
-        for _, meta in candidates:
-            try:
-                data = json.loads(meta.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            url = data.get("report_url") if isinstance(data, dict) else None
-            if not isinstance(url, str) or not url:
-                continue
-            for marker in ("/build/evaluations/", "/build/evaluation/"):
-                idx = url.find(marker)
-                if idx >= 0:
-                    return _with_tenant(url[:idx] + "/build/agents")
-            return _with_tenant(url + ("" if "/build/" in url else "/build/agents"))
-    return _with_tenant("https://ai.azure.com")
+    if not results_root.is_dir():
+        return None
+    candidates: List[Tuple[str, Path]] = []
+    for entry in results_root.iterdir():
+        if not entry.is_dir() or entry.name == "latest":
+            continue
+        meta = entry / "cloud_evaluation.json"
+        if meta.exists():
+            candidates.append((entry.name, meta))
+    candidates.sort(key=lambda kv: kv[0], reverse=True)
+    for _, meta in candidates:
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        url = data.get("report_url") if isinstance(data, dict) else None
+        if not isinstance(url, str) or not url:
+            continue
+        for marker in ("/build/evaluations/", "/build/evaluation/"):
+            idx = url.find(marker)
+            if idx >= 0:
+                return url[:idx]
+        # No /build/ segment — assume the full URL is already the root.
+        return url.rstrip("/")
+    return None
 
 
 def _with_tenant(url: str) -> str:
@@ -1409,24 +1435,6 @@ def _headline_badge_critical(series: List[float]) -> Dict[str, str]:
     return {"label": "above zero", "tone": "crit"}
 
 
-def _category_badge(
-    key: str, current: int, records: List[AnalysisRecord]
-) -> Dict[str, str]:
-    if not records:
-        return {"label": "no data", "tone": "muted"}
-    if current == 0:
-        return {"label": "in range", "tone": "ok"}
-    if len(records) >= 2:
-        prev = records[-2].findings_by_category.get(key, 0)
-        if prev == 0:
-            return {"label": "new", "tone": "warn"}
-        if current > prev:
-            return {"label": "trending up", "tone": "warn"}
-        if current < prev:
-            return {"label": "trending down", "tone": "ok"}
-    return {"label": "active", "tone": "info"}
-
-
 def _latest_run_badge(record: Optional[AnalysisRecord]) -> tuple:
     if record is None:
         return ("never", {"label": "no data", "tone": "muted"})
@@ -1749,6 +1757,59 @@ def _sparkline_svg(
     )
 
 
+def _render_findings_list(findings: List[Dict[str, Any]]) -> str:
+    """Render the watchdog's latest findings as a vertical list, sorted
+    by severity. Replaces the per-category trend cards: the list is
+    easier to scan and reads "what should I fix next" instead of
+    "how have my category counts trended".
+    """
+    if not findings:
+        return (
+            '<div class="findings-empty">'
+            '<span class="findings-empty-icon">&#x2713;</span>'
+            '<div><strong>All clear.</strong> '
+            "The watchdog produced zero findings in the latest run.</div>"
+            '</div>'
+        )
+
+    rows: List[str] = []
+    for f in findings:
+        sev = str(f.get("severity") or "info").lower()
+        cat = str(f.get("category") or "").strip()
+        title = str(f.get("title") or "—")
+        summary = str(f.get("summary") or "").strip()
+        rec = str(f.get("recommendation") or "").strip()
+        source = str(f.get("source") or "").strip()
+        sev_tone = {"critical": "crit", "warning": "warn", "info": "info"}.get(sev, "muted")
+        cat_label = _CATEGORY_LABELS.get(cat, cat.title() or "—")
+
+        rec_html = (
+            f'<div class="finding-recommendation"><strong>Fix:</strong> '
+            f'{_html_escape(rec)}</div>' if rec else ""
+        )
+        source_html = (
+            f'<div class="finding-source">Source: {_html_escape(source)}</div>'
+            if source else ""
+        )
+        rows.append(
+            '<div class="finding">'
+            f'<div class="finding-row1">'
+            f'<span class="badge tone-{sev_tone}">{_html_escape(sev)}</span>'
+            f'<span class="finding-cat">{_html_escape(cat_label)}</span>'
+            f'<span class="finding-title">{_html_escape(title)}</span>'
+            '</div>'
+            + (f'<div class="finding-summary">{_html_escape(summary)}</div>' if summary else "")
+            + rec_html
+            + source_html
+            + '</div>'
+        )
+
+    return (
+        '<div class="section-title sub">Recent findings</div>'
+        f'<div class="findings-list">{"".join(rows)}</div>'
+    )
+
+
 def _icon_data_uri() -> str:
     """Read the bundled icon.png and return a base64 data URI.
 
@@ -1856,17 +1917,24 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
         )
 
     watchdog = payload["watchdog"]
+    compliance_url = payload.get("foundry_compliance_url")
+    compliance_link = ""
+    if compliance_url:
+        compliance_link = (
+            f' <a class="section-link" href="{_html_escape(compliance_url)}" '
+            'target="_blank" rel="noopener noreferrer">'
+            'View in Foundry Compliance &#x2197;</a>'
+        )
+    watchdog_title = f"Watchdog findings{compliance_link}"
+
     if watchdog["has_history"]:
         watchdog_headline = "".join(
             _render_card(c, hero=True) for c in watchdog["headline_cards"]
         )
-        watchdog_categories = "".join(
-            _render_card(c) for c in watchdog["category_cards"]
-        )
+        findings_list = _render_findings_list(watchdog.get("latest_findings") or [])
         watchdog_body = (
             f'<div class="grid">{watchdog_headline}</div>'
-            '<div class="section-title sub">By category</div>'
-            f'<div class="grid">{watchdog_categories}</div>'
+            f'{findings_list}'
         )
     else:
         watchdog_body = (
@@ -1875,7 +1943,7 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
             "<code>agentops agent analyze</code> to populate this section."
             "</div>"
         )
-    watchdog_section = _collapsible_section("Watchdog findings", watchdog_body)
+    watchdog_section = _collapsible_section(watchdog_title, watchdog_body)
 
     production = payload.get("production") or {}
     production_section = ""
@@ -2536,6 +2604,68 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
     background: rgba(255, 255, 255, 0.04); padding: 2px 7px; border-radius: 6px;
     color: var(--text); font-size: 12px;
     font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+  }}
+  /* Findings list (watchdog section). One stacked card per finding,
+     sorted by severity. Replaces the per-category trend mini-charts. */
+  .findings-list {{
+    display: flex; flex-direction: column; gap: 10px;
+    margin-top: 8px;
+  }}
+  .finding {{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }}
+  .finding-row1 {{
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap;
+  }}
+  .finding-cat {{
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    font-weight: 600;
+  }}
+  .finding-title {{
+    color: var(--text);
+    font-weight: 600;
+    font-size: 13px;
+    flex: 1 1 auto;
+    min-width: 0;
+  }}
+  .finding-summary {{
+    margin-top: 6px;
+    line-height: 1.5;
+  }}
+  .finding-recommendation {{
+    margin-top: 6px;
+    line-height: 1.5;
+    color: var(--text);
+  }}
+  .finding-recommendation strong {{ color: var(--info); }}
+  .finding-source {{
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+  }}
+  .findings-empty {{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex; align-items: center; gap: 12px;
+    color: var(--text-dim);
+    margin-top: 8px;
+  }}
+  .findings-empty-icon {{
+    font-size: 18px;
+    color: var(--ok);
+    font-weight: 700;
   }}
   footer {{
     margin-top: 40px; font-size: 11px; color: var(--text-faint);

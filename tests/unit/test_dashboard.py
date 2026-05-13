@@ -199,12 +199,45 @@ def test_telemetry_status_reflects_env(tmp_path: Path, monkeypatch):
     assert payload["telemetry"]["source"] == "env"
 
 
-def test_watchdog_section_still_renders_when_no_eval_runs(tmp_path: Path):
-    _make_history(tmp_path, (Severity.WARNING, Category.QUALITY))
+def test_watchdog_section_surfaces_latest_findings(tmp_path: Path):
+    """The watchdog section exposes the latest run's findings (sorted by
+    severity desc) instead of per-category trend charts."""
+    # One record with two findings — the section surfaces findings from
+    # the most-recent record, not historical ones.
+    findings = [
+        Finding(
+            id="f-warn",
+            severity=Severity.WARNING,
+            title="quality warning",
+            summary="summary 1",
+            recommendation="rec 1",
+            source="test",
+            category=Category.QUALITY,
+        ),
+        Finding(
+            id="f-crit",
+            severity=Severity.CRITICAL,
+            title="reliability outage",
+            summary="summary 2",
+            recommendation="rec 2",
+            source="test",
+            category=Category.RELIABILITY,
+        ),
+    ]
+    record = build_record(
+        findings, sources_enabled=["results_history"], lookback_days=7, duration_seconds=0.5,
+    )
+    append_analysis(tmp_path, record)
+
     payload = build_dashboard_payload(tmp_path, time_range=_WIDE)
     assert payload["watchdog"]["has_history"] is True
-    cat_keys = {c["key"] for c in payload["watchdog"]["category_cards"]}
-    assert cat_keys == {"quality", "performance", "reliability", "security"}
+    surfaced = payload["watchdog"]["latest_findings"]
+    assert len(surfaced) == 2
+    # Critical should sort above warning.
+    assert surfaced[0]["severity"] == "critical"
+    assert surfaced[1]["severity"] == "warning"
+    # Old per-category trend cards are gone — replaced by the list.
+    assert "category_cards" not in payload["watchdog"]
 
 
 def test_html_includes_all_sections_when_data_present(tmp_path: Path):
