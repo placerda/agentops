@@ -136,7 +136,7 @@ The report grows a `Comparison vs Baseline` section with per-metric deltas.
 | `agentops workflow generate` | Generate GitHub Actions workflow |
 | `agentops skills install [--platform <p>]` | Install coding agent skills (Copilot, Claude) |
 | `agentops mcp serve` | Start the AgentOps MCP server (stdio). Requires `pip install "agentops-toolkit[mcp] @ git+https://github.com/Azure/agentops.git@develop"`. |
-| `agentops agent analyze` | Run the watchdog over your run history. Requires `pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@develop"`. |
+| `agentops doctor` | Run the watchdog over your run history. Requires `pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@develop"`. |
 | `agentops agent serve` | Start the watchdog as a FastAPI Copilot Extension. Requires `pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@develop"`. |
 
 ## Documentation

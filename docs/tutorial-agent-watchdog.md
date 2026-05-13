@@ -20,7 +20,7 @@ in three form factors:
 
 | Form factor | Use it when… |
 |---|---|
-| `agentops agent analyze` (CLI) | You want a Markdown report locally or in CI. |
+| `agentops doctor` (CLI) | You want a Markdown report locally or in CI. |
 | `agentops agent serve` (FastAPI Copilot Extension) | You want a chat-driven watchdog inside GitHub Copilot Chat. |
 | Container Apps deploy (`templates/agent-server/`) | You want the same Copilot Extension hosted publicly. |
 
@@ -34,7 +34,7 @@ agentops init                     # if you don't already have .agentops/
 $template = python -c "import agentops, pathlib; print(pathlib.Path(agentops.__file__).parent / 'templates' / 'agent.yaml')"
 Copy-Item $template .agentops\agent.yaml
 
-agentops agent analyze
+agentops doctor
 ```
 
 The first run produces `.agentops/agent/report.md`. With no
@@ -62,7 +62,7 @@ enabled):
 ```powershell
 pip install "agentops-toolkit[agent]"
 az login
-agentops agent analyze --severity-fail critical
+agentops doctor --severity-fail critical
 ```
 
 Exit codes are CI-friendly:
@@ -97,7 +97,7 @@ Azure OpenAI account:
 | `waf.security.content_filter` | critical | Every model deployment has a RAI policy applied |
 
 Required RBAC: **Reader** on the resource group (or on each individual
-resource), granted to whoever runs `agentops agent analyze` (your local
+resource), granted to whoever runs `agentops doctor` (your local
 identity locally, or the OIDC-federated identity in CI).
 
 Find the account to audit:
@@ -157,7 +157,7 @@ checks:
 Run only the security category first:
 
 ```powershell
-agentops agent analyze --categories security --severity-fail critical
+agentops doctor --categories security --severity-fail critical
 code .agentops/agent/report.md
 ```
 
@@ -207,16 +207,16 @@ Run only the security category, or skip a specific rule from the CLI:
 
 ```powershell
 # Run every check, including the WAF audit (the default once enabled).
-agentops agent analyze
+agentops doctor
 
 # Only run the security audit.
-agentops agent analyze --categories security
+agentops doctor --categories security
 
 # Skip a specific rule on top of any YAML excludes.
-agentops agent analyze --exclude-rules waf.security.diagnostic_settings
+agentops doctor --exclude-rules waf.security.diagnostic_settings
 
 # Skip multiple rules.
-agentops agent analyze --exclude-rules waf.security.diagnostic_settings,waf.security.managed_identity
+agentops doctor --exclude-rules waf.security.diagnostic_settings,waf.security.managed_identity
 ```
 
 The Markdown report groups findings by category, so security findings
@@ -247,7 +247,7 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - run: agentops agent analyze --severity-fail critical
+      - run: agentops doctor --severity-fail critical
       - uses: actions/upload-artifact@v4
         with:
           name: agentops-watchdog-report

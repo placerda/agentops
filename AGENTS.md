@@ -22,7 +22,7 @@ Public CLI contract:
 - `agentops report generate --in <results.json> [--out <report.md>]`
 - `agentops workflow generate [--force] [--dir <path>]`
 - `agentops skills install [--platform <p>] [--prompt] [--force]`
-- `agentops agent analyze [--workspace <path>] [--config <path>] [--out <path>] [--lookback-days N] [--severity-fail <severity>]`
+- `agentops doctor [--workspace <path>] [--config <path>] [--out <path>] [--lookback-days N] [--severity-fail <severity>]`
 - `agentops agent serve [--host <host>] [--port <port>] [--config <path>] [--no-verify] [--workers N]`
 
 Planned CLI stubs (not implemented in this release):

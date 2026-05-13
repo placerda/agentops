@@ -264,7 +264,7 @@ Configure the `dev` environment variables and OIDC credential as shown in
 ## 8. Run Watchdog
 
 ```powershell
-agentops agent analyze --severity-fail critical
+agentops doctor --severity-fail critical
 code .agentops/agent/report.md
 ```
 

@@ -318,7 +318,7 @@ Watchdog is a runtime analyzer, not a coding-agent skill. The
 Start with results-history analysis:
 
 ```powershell
-agentops agent analyze --severity-fail critical
+agentops doctor --severity-fail critical
 code .agentops/agent/report.md
 ```
 
@@ -350,7 +350,7 @@ sources:
     project_endpoint_env: AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
 "@ | Set-Content .agentops/agent.yaml -Encoding utf8
 
-agentops agent analyze --severity-fail critical
+agentops doctor --severity-fail critical
 ```
 
 The Watchdog report lists which sources ran and which were skipped. Do

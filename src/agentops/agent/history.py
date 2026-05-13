@@ -1,6 +1,6 @@
 """Append-only analysis history for the watchdog agent.
 
-Each ``agentops agent analyze`` invocation appends one JSON record to
+Each ``agentops doctor`` invocation appends one JSON record to
 ``.agentops/agent/history.jsonl``. The file is the canonical local
 storage for the dashboard (``agentops dashboard``) and for any future
 trend-based checks. No Azure resource required.

@@ -55,7 +55,7 @@ src/
     │   ├── skills.py          # Coding agent skill installation
     │   └── cicd.py            # CI/CD workflow generation
     │
-    ├── agent/                 # `agentops agent analyze|serve` watchdog
+    ├── agent/                 # `agentops doctor|serve` watchdog
     ├── mcp/                   # `agentops mcp serve` Model Context Protocol server
     │
     ├── utils/                 # Shared helpers (yaml load, logging, colors)

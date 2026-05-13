@@ -13,7 +13,7 @@ Use this skill when the user asks any of:
 - *"Show latency / error spikes from Azure Monitor"*
 - *"Open the AgentOps watchdog report"*
 
-This skill is the front door to `agentops agent analyze` and the
+This skill is the front door to `agentops doctor` and the
 `agentops agent serve` Copilot Extension. It does **not** invent
 findings — it shells out to the CLI which reads real data from:
 
@@ -40,7 +40,7 @@ values the sources skip gracefully.
 ### 2. Run the analyzer
 
 ```bash
-agentops agent analyze --severity-fail critical
+agentops doctor --severity-fail critical
 ```
 
 The command writes `.agentops/agent/report.md`. Exit codes:
@@ -122,7 +122,7 @@ Extension on Azure Container Apps.
 
 - Do **not** fabricate findings, metric values, or recommendations.
 - Do **not** invent CLI flags. The contract is exactly:
-  - `agentops agent analyze [--workspace] [--config] [--out] [--lookback-days] [--severity-fail]`
+  - `agentops doctor [--workspace] [--config] [--out] [--lookback-days] [--severity-fail]`
   - `agentops agent serve [--host] [--port] [--config] [--no-verify] [--workers]`
   - `agentops dashboard [--host] [--port] [--workspace]`
 - If a source is `skipped` or `error`, surface that as the *first*

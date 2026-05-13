@@ -11,7 +11,7 @@ missing, returns an empty payload with a diagnostic note (same fail-open
 pattern as ``azure_monitor`` and ``foundry_control``).
 
 Required RBAC: ``Reader`` on the resource group (or on each individual
-resource), granted to whoever runs ``agentops agent analyze``.
+resource), granted to whoever runs ``agentops doctor``.
 """
 
 from __future__ import annotations

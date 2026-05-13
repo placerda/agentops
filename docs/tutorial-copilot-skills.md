@@ -9,7 +9,7 @@ They are not the same thing as the AgentOps Watchdog runtime:
 | Concept | Where it lives | What it does |
 |---|---|---|
 | Coding-agent skills | `.github/skills/` or `.claude/commands/` | Guide Copilot to create config, datasets, workflows, evals, reports, and Watchdog commands. |
-| Watchdog runtime | `agentops agent analyze` / `agentops agent serve` | Reads real eval history, Azure Monitor telemetry, and Foundry metadata to produce findings. |
+| Watchdog runtime | `agentops doctor` / `agentops agent serve` | Reads real eval history, Azure Monitor telemetry, and Foundry metadata to produce findings. |
 | `agentops-agent` skill | Installed skill file | The Copilot-facing workflow for invoking Watchdog. It does not invent findings. |
 
 ## Implemented skills
@@ -23,7 +23,7 @@ The current CLI installs these skills:
 | `agentops-eval` | Run evals, handle exit codes, and compare against baselines. |
 | `agentops-report` | Explain `results.json` and `report.md`. |
 | `agentops-workflow` | Generate supported GitHub Actions workflows and explain required GitHub/Azure wiring. |
-| `agentops-agent` | Run and interpret Watchdog (`agentops agent analyze` / `serve`). |
+| `agentops-agent` | Run and interpret Watchdog (`agentops doctor` / `serve`). |
 
 There are no shipped `agentops-monitor`, `agentops-trace`, or
 `agentops-regression` skills in this implementation. Monitoring,
@@ -253,7 +253,7 @@ if a source is skipped, say why.
 Expected command:
 
 ```powershell
-agentops agent analyze --severity-fail critical
+agentops doctor --severity-fail critical
 ```
 
 Expected output:

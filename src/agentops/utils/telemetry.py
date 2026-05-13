@@ -379,7 +379,7 @@ def agent_analyze_span(
     workspace: str,
     lookback_days: Optional[int] = None,
 ) -> Generator[Optional[Any], None, None]:
-    """Root span for a watchdog ``agentops agent analyze`` run.
+    """Root span for a watchdog ``agentops doctor`` run.
 
     Mirrors :func:`eval_run_span` for the watchdog: when telemetry is
     enabled (``APPLICATIONINSIGHTS_CONNECTION_STRING`` or

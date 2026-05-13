@@ -670,7 +670,7 @@ tutorial those signals are:
 2. Application Insights telemetry emitted by a new eval run.
 3. Foundry control-plane metadata for the hosted support agent.
 
-If you run `agentops agent analyze` without Application Insights
+If you run `agentops doctor` without Application Insights
 configured, the report can only say `azure_monitor: skipped`. That is not
 an observability tutorial. The next commands create Application Insights,
 send telemetry into it, and then run the watchdog against the live data.
@@ -823,11 +823,11 @@ agentops eval run
 # Azure Monitor ingestion is asynchronous. Give it a short moment to index.
 Start-Sleep -Seconds 90
 
-agentops agent analyze
+agentops doctor
 code .agentops/agent/report.md
 
 # Optional: focus only on WAF-AI security posture.
-agentops agent analyze --categories security --severity-fail critical
+agentops doctor --categories security --severity-fail critical
 ```
 
 The report should now show `azure_monitor` and `azure_resources` as `ok`,

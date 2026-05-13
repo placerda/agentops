@@ -10,7 +10,7 @@ They are different from the **AgentOps Watchdog runtime agent**:
 
 - **Skills** live in `.github/skills/` or `.claude/commands/` and guide a
   coding assistant.
-- **Watchdog** is the runtime CLI/server behind `agentops agent analyze`
+- **Watchdog** is the runtime CLI/server behind `agentops doctor`
   and `agentops agent serve`; it reads real eval history, Azure Monitor
   telemetry, and Foundry metadata.
 - The `agentops-agent` skill is only the coding-agent front door to that
@@ -25,7 +25,7 @@ They are different from the **AgentOps Watchdog runtime agent**:
 | **agentops-eval** | Run `agentops eval run`, handle exit codes, and compare with `--baseline`. |
 | **agentops-report** | Explain `results.json` / `report.md` and suggest concrete next actions. |
 | **agentops-workflow** | Generate the supported GitHub Actions CI/CD scaffold and explain required GitHub/Azure wiring. |
-| **agentops-agent** | Run and interpret the Watchdog runtime (`agentops agent analyze` / `serve`). |
+| **agentops-agent** | Run and interpret the Watchdog runtime (`agentops doctor` / `serve`). |
 
 There are no shipped `agentops-monitor`, `agentops-trace`, or
 `agentops-regression` skills in the current implementation.

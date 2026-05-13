@@ -1,4 +1,4 @@
-"""CLI tests for `agentops agent analyze`."""
+"""CLI tests for `agentops doctor`."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def _agent_yaml(disable_remote: bool = True) -> str:
     )
 
 
-def test_agent_analyze_reports_regression_and_exits_two(tmp_path: Path) -> None:
+def test_doctor_reports_regression_and_exits_two(tmp_path: Path) -> None:
     _seed_regression(tmp_path)
     (tmp_path / ".agentops" / "agent.yaml").write_text(
         _agent_yaml(), encoding="utf-8"
@@ -61,7 +61,7 @@ def test_agent_analyze_reports_regression_and_exits_two(tmp_path: Path) -> None:
 
     result = runner.invoke(
         app,
-        ["agent", "analyze", "--workspace", str(tmp_path), "--severity-fail", "warning"],
+        ["doctor", "--workspace", str(tmp_path), "--severity-fail", "warning"],
     )
 
     assert result.exit_code == 2, result.stdout
@@ -71,24 +71,23 @@ def test_agent_analyze_reports_regression_and_exits_two(tmp_path: Path) -> None:
     assert "regression.coherence" in body
 
 
-def test_agent_analyze_no_findings_exits_zero(tmp_path: Path) -> None:
+def test_doctor_no_findings_exits_zero(tmp_path: Path) -> None:
     # Empty workspace -> no runs -> no findings.
     (tmp_path / ".agentops").mkdir()
     (tmp_path / ".agentops" / "agent.yaml").write_text(
         _agent_yaml(), encoding="utf-8"
     )
     result = runner.invoke(
-        app, ["agent", "analyze", "--workspace", str(tmp_path)]
+        app, ["doctor", "--workspace", str(tmp_path)]
     )
     assert result.exit_code == 0, result.stdout
 
 
-def test_agent_analyze_rejects_invalid_severity(tmp_path: Path) -> None:
+def test_doctor_rejects_invalid_severity(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "agent",
-            "analyze",
+            "doctor",
             "--workspace",
             str(tmp_path),
             "--severity-fail",
@@ -96,3 +95,13 @@ def test_agent_analyze_rejects_invalid_severity(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 1
+
+
+def test_agent_analyze_alias_is_gone(tmp_path: Path) -> None:
+    """The legacy `agentops agent analyze` alias was removed in the
+    rename — invoking it should fail with Typer's 'no such command' exit
+    code (2), not run a hidden alias."""
+    result = runner.invoke(
+        app, ["agent", "analyze", "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code != 0
