@@ -1905,7 +1905,7 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
             "to surface workflow runs here."
         )
         deployments_body = f'<div class="empty-state">{hint}</div>'
-    deployments_section = _collapsible_section("Deployments", deployments_body)
+    deployments_section = _collapsible_section("CI/CD", deployments_body)
 
     metrics_section = ""
     if payload["metrics"]:
