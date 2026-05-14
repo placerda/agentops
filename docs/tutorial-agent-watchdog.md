@@ -38,9 +38,11 @@ agentops doctor
 ```
 
 The first run produces `.agentops/agent/report.md`. With no
-`agent.yaml` the analyzer uses defaults: results-history is the only
-active source, Azure Monitor and Foundry control are reported as
-`skipped` in the diagnostics block.
+`agent.yaml` the analyzer uses defaults: `results_history` is the only
+configured source, while `azure_monitor` and `foundry_control` are
+reported as `skipped` in the diagnostics block. On a brand-new
+workspace `results_history` shows as `missing` until you have at least
+one `agentops eval run` under `.agentops/results/` for it to read.
 
 ## 2. Wire production telemetry
 
