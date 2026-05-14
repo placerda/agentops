@@ -180,8 +180,11 @@ agentops init
 $env:AZURE_AI_FOUNDRY_PROJECT_ENDPOINT = "https://<resource>.services.ai.azure.com/api/projects/<project>"
 $env:AZURE_OPENAI_ENDPOINT             = "https://<resource>.openai.azure.com"
 $env:AZURE_OPENAI_DEPLOYMENT           = "gpt-4o-mini"
-$env:AZURE_AI_MODEL_DEPLOYMENT_NAME    = "gpt-4o-mini"
 ```
+
+`AZURE_AI_MODEL_DEPLOYMENT_NAME` is accepted as a fallback name for the
+judge deployment. Set only one of the two — `AZURE_OPENAI_DEPLOYMENT`
+wins when both are set.
 
 ## 4. Write `agentops.yaml`
 
