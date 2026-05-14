@@ -63,7 +63,17 @@ stages:
                 python -m pip install --upgrade pip
                 # NOTE: pinned to develop branch until AgentOps 1.0 lands on PyPI.
                 python -m pip install "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@develop"
-                agentops eval run --config "$(AGENTOPS_CONFIG)"
+                # Auto-detect a committed baseline so the PR gate becomes a
+                # regression check when .agentops/baseline/results.json is present.
+                # Drop or refresh that file with `cp .agentops/results/latest/results.json .agentops/baseline/results.json`.
+                BASELINE_ARG=""
+                if [ -f .agentops/baseline/results.json ]; then
+                  BASELINE_ARG="--baseline .agentops/baseline/results.json"
+                  echo "Using baseline: .agentops/baseline/results.json"
+                else
+                  echo "No .agentops/baseline/results.json found; running without baseline comparison."
+                fi
+                agentops eval run --config "$(AGENTOPS_CONFIG)" $BASELINE_ARG
                 ec=$?
                 echo "##vso[task.setvariable variable=evalExitCode;isOutput=true]$ec"
                 if [ $ec -eq 0 ]; then
