@@ -69,12 +69,19 @@ Choose a model deployment (e.g., `gpt-5.1`) and save the agent.
 
 ### 3) Note the agent identifier
 
-After saving, you need the agent's identifier for the run config. There are two types:
+After saving, you need the agent's identifier for the run config.
+AgentOps uses the Foundry **Responses API**, which addresses agents by
+`name:version` — for example `qa-bot:1` or `customer-support:3`. If
+Foundry shows `v3`, write `:3` without the `v`.
 
-- **Named agents** (new Foundry experience): use the agent name, optionally with a published version number — e.g., `my-agent` or `my-agent:3`. If Foundry shows `v3`, write `:3` without the `v`.
-- **Legacy agents** (asst_ prefix): use the full ID — e.g., `asst_ftDQySPlKUwcgR1eiXEzUEO5`
-
-AgentOps handles both. Named agents use the Foundry Responses API; legacy agents use the Threads API.
+> **Legacy `asst_*` agents (classic Foundry):** agents created in the
+> classic Foundry portal are identified by an `asst_*` ID and served by
+> the older Threads/Assistants API. AgentOps does **not** support that
+> API path today (the schema rejects bare `asst_*` strings and the
+> Foundry Responses API requires a versioned name even for migrated
+> assistants). If you have a legacy agent, recreate it as a named,
+> versioned agent in the new Foundry experience — track-issue
+> [#143](https://github.com/Azure/agentops/issues/143).
 
 ### 4) Connect Application Insights (recommended)
 
@@ -120,8 +127,8 @@ Open `agentops.yaml` at your project root and point it at your agent:
 
 ```yaml
 version: 1
-agent: "my-agent:1"                       # ← your agent name:version (or asst_ ID)
-dataset: .agentops/data/smoke-agent-tools.jsonl
+agent: "my-agent:1"                       # ← your agent name:version
+dataset: .agentops/data/smoke.jsonl
 publish: foundry_cloud                    # optional: show the run in New Foundry Evaluations
 thresholds:
   similarity: ">=3"
@@ -142,18 +149,22 @@ Key points:
 
 ## Part 4: Review the dataset
 
-The sample dataset at `.agentops/data/smoke-agent-tools.jsonl` contains five prompts designed for an agent with tool capabilities:
-
-```jsonl
-{"id":"1","input":"What is the weather in Seattle today?","expected":"I'll check the weather for Seattle..."}
-{"id":"2","input":"Convert 100 USD to EUR","expected":"100 USD is approximately 92 EUR..."}
-```
-
-These prompts include questions that might trigger tool calls (weather, currency conversion, search). If your agent does not have these tools, it will answer based on its knowledge, which may score lower on similarity. That is expected — the evaluation measures what the agent *actually does*, not what it could do with the right tools.
+`agentops init` already created `.agentops/data/smoke.jsonl` with three
+short factual prompts (Paris/France, Mars, water). These rows are
+intentionally easy and deterministic so the first run focuses on
+proving the AgentOps → Foundry-agent loop works end-to-end rather than
+debugging subjective wording differences.
 
 ### Adapting the dataset to your agent
 
-For meaningful evaluation, your dataset should match what your agent is designed to do. If your agent is a customer support bot, test it with customer support questions. If it is a code assistant, test it with coding tasks. The smoke dataset is just a starting point.
+For meaningful evaluation, your dataset should match what your agent is
+designed to do. If your agent is a customer support bot, test it with
+customer support questions. If it is a code assistant, test it with
+coding tasks. The seed `smoke.jsonl` is just a starting point — replace
+the rows with realistic prompts for your application once the smoke
+test passes. If your agent uses tool calls, see
+[tutorial-agent-workflow.md](tutorial-agent-workflow.md) for the
+dataset shape that triggers tool-aware evaluators.
 
 ## Part 5: Run the evaluation
 
@@ -228,7 +239,10 @@ The RAG scenario uses GroundednessEvaluator instead of SimilarityEvaluator becau
 
 - **Local vs Foundry publishing**: By default, AgentOps invokes the agent row-by-row and runs evaluators locally. Add `publish: foundry_cloud` to also submit a server-side run to the New Foundry Evaluations panel.
 - **Authentication**: `DefaultAzureCredential` handles auth automatically. For local dev, use `az login`. For CI, set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET`.
-- **Named vs legacy agents**: Named agents (e.g., `my-agent:3`) use the Responses API. Legacy agents (`asst_*`) use the Threads API. Both work transparently.
+- **Named agents only**: AgentOps targets the Foundry Responses API,
+  which addresses agents by `name:version`. Legacy classic-portal
+  `asst_*` IDs are not supported today (see
+  [#143](https://github.com/Azure/agentops/issues/143)).
 - **Exit codes**: `0` = all thresholds passed, `2` = threshold failures, `1` = error.
 
 ## Next steps
