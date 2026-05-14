@@ -158,6 +158,9 @@ def _build_production_section(
             from agentops.utils.foundry_discovery import (
                 resolve_appinsights_connection_from_env,
             )
+            # Returns the cached value when discovery already succeeded
+            # earlier in this process, so this never re-hits Foundry on
+            # the deferred /api/production/html load.
             conn = resolve_appinsights_connection_from_env()
         except Exception:  # noqa: BLE001
             conn = None
@@ -1355,13 +1358,15 @@ def _telemetry_status() -> Dict[str, Any]:
             "tone": "ok",
         }
     if project:
+        reason: Optional[str] = None
         try:
             from agentops.utils.foundry_discovery import (
-                resolve_appinsights_connection_from_env,
+                resolve_appinsights_connection_from_env_with_reason,
             )
-            conn = resolve_appinsights_connection_from_env()
-        except Exception:  # noqa: BLE001
+            conn, reason = resolve_appinsights_connection_from_env_with_reason()
+        except Exception as exc:  # noqa: BLE001
             conn = None
+            reason = f"discovery raised {type(exc).__name__}: {exc}"
         if conn:
             return {
                 "enabled": True,
@@ -1371,6 +1376,15 @@ def _telemetry_status() -> Dict[str, Any]:
                 "portal_url": _appinsights_portal_url(conn),
                 "tone": "ok",
             }
+        # Surface the actual reason inline so the user does not have to
+        # tail the dashboard server logs to learn why discovery failed.
+        reason_html = (
+            f'<div class="telemetry-reason">'
+            f'<strong>Why:</strong> {_html_escape(reason)}'
+            "</div>"
+            if reason
+            else ""
+        )
         return {
             "enabled": False,
             "source": "discovery_failed",
@@ -1381,6 +1395,7 @@ def _telemetry_status() -> Dict[str, Any]:
                 "Insights</strong>. "
                 '<a href="https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup" '
                 'target="_blank" rel="noopener noreferrer">Docs &#x2197;</a>'
+                f"{reason_html}"
             ),
             "portal_url": None,
             "tone": "warn",
