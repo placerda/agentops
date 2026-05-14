@@ -241,7 +241,7 @@ def _acquire_token() -> str:
         return cached[1]
 
     from azure.identity import DefaultAzureCredential
-    credential = DefaultAzureCredential(exclude_developer_cli_credential=True)
+    credential = DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30)
     token = credential.get_token("https://api.applicationinsights.io/.default")
     _token_cache["bearer"] = (now, token.token)
     return token.token

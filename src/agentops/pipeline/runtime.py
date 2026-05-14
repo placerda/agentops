@@ -61,7 +61,7 @@ class EvaluatorRuntime:
 def _credential() -> Any:
     from azure.identity import DefaultAzureCredential  # noqa: WPS433
 
-    return DefaultAzureCredential(exclude_developer_cli_credential=True)
+    return DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30)
 
 
 def _model_config() -> Dict[str, str]:

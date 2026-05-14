@@ -99,7 +99,7 @@ def collect_foundry_control(
     payload = FoundryControlPayload(diagnostics=diagnostics)
 
     try:
-        credential = DefaultAzureCredential(exclude_developer_cli_credential=True)
+        credential = DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30)
         client = AIProjectClient(endpoint=endpoint, credential=credential)
     except Exception as exc:  # pragma: no cover
         diagnostics["status"] = "error"

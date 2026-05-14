@@ -200,9 +200,7 @@ def run_on_foundry_cloud(
             "  pip install azure-ai-projects azure-identity"
         ) from exc
 
-    credential = DefaultAzureCredential(
-        exclude_developer_cli_credential=True,
-    )
+    credential = DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30)
     project_client = AIProjectClient(
         endpoint=project_endpoint,
         credential=credential,

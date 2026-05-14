@@ -139,7 +139,7 @@ def collect_azure_resources(
     payload = AzureResourcesPayload(diagnostics=diagnostics)
 
     try:
-        credential = DefaultAzureCredential(exclude_developer_cli_credential=True)
+        credential = DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30)
         cs_client = CognitiveServicesManagementClient(credential, subscription_id)
         monitor_client = MonitorManagementClient(credential, subscription_id)
 

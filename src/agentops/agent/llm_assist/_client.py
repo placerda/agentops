@@ -112,9 +112,7 @@ class LLMJudge:
         try:
             project_client = AIProjectClient(
                 endpoint=endpoint,
-                credential=DefaultAzureCredential(
-                    exclude_developer_cli_credential=True
-                ),
+                credential=DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30),
             )
             accessor = getattr(project_client, "deployments", None) or getattr(
                 project_client, "models", None
@@ -242,9 +240,7 @@ class LLMJudge:
         try:
             project_client = AIProjectClient(
                 endpoint=endpoint,
-                credential=DefaultAzureCredential(
-                    exclude_developer_cli_credential=True
-                ),
+                credential=DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30),
             )
             # Foundry exposes get_openai_client without an api_version arg;
             # never pass one (the SDK picks the right version).

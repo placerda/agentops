@@ -93,9 +93,7 @@ def resolve_appinsights_connection_with_reason(
         return None, reason
 
     try:
-        credential = DefaultAzureCredential(
-            exclude_developer_cli_credential=True,
-        )
+        credential = DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30)
         client = AIProjectClient(
             endpoint=project_endpoint,
             credential=credential,

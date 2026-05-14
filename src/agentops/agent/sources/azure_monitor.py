@@ -91,7 +91,7 @@ def collect_azure_monitor(
     diagnostics["target"] = workspace_or_resource
 
     try:
-        credential = DefaultAzureCredential(exclude_developer_cli_credential=True)
+        credential = DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30)
         client = LogsQueryClient(credential)
         kql = _REQUESTS_KQL.format(lookback_days=int(lookback_days))
         if config.log_analytics_workspace_id:

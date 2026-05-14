@@ -86,9 +86,7 @@ def _credential() -> Any:
     if _CREDENTIAL_SINGLETON is None:
         from azure.identity import DefaultAzureCredential  # noqa: WPS433
 
-        _CREDENTIAL_SINGLETON = DefaultAzureCredential(
-            exclude_developer_cli_credential=True
-        )
+        _CREDENTIAL_SINGLETON = DefaultAzureCredential(exclude_developer_cli_credential=True, process_timeout=30)
     return _CREDENTIAL_SINGLETON
 
 
