@@ -48,7 +48,7 @@ python -m venv .venv
 python -m pip install -U pip
 python -m pip install "agentops-toolkit[foundry,agent]"
 
-agentops skills install --platform copilot --force
+agentops skills install --platform copilot
 ```
 
 Expected files:
@@ -83,8 +83,11 @@ Set local evaluator variables:
 $env:AZURE_AI_FOUNDRY_PROJECT_ENDPOINT = "https://<resource>.services.ai.azure.com/api/projects/<project>"
 $env:AZURE_OPENAI_ENDPOINT             = "https://<resource>.openai.azure.com"
 $env:AZURE_OPENAI_DEPLOYMENT           = "gpt-4o-mini"
-$env:AZURE_AI_MODEL_DEPLOYMENT_NAME    = "gpt-4o-mini"
 ```
+
+`AZURE_AI_MODEL_DEPLOYMENT_NAME` is accepted as a fallback name for the
+judge deployment if you prefer the Foundry-style variable. Set only one
+of the two — `AZURE_OPENAI_DEPLOYMENT` wins when both are set.
 
 ## 1. Ask Copilot to configure AgentOps
 
