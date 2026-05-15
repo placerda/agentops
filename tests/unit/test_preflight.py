@@ -26,7 +26,7 @@ def test_workspace_check_passes_for_init_workspace(tmp_path: Path) -> None:
 def test_workspace_check_warns_when_not_initialized(tmp_path: Path) -> None:
     c = _check_workspace(tmp_path)
     assert c.status == "warn"
-    assert "agentops init" in c.message
+    assert "agentops init" in c.remediation
 
 
 def test_workspace_check_fails_for_missing_dir(tmp_path: Path) -> None:
@@ -52,7 +52,8 @@ def test_azure_cli_check_humanizes_az_login_failure() -> None:
     with mock.patch("azure.identity.DefaultAzureCredential", _FakeCred):
         c = _check_azure_cli()
     assert c.status == "fail"
-    assert "az login" in c.message
+    assert c.message == "Not signed in to Azure."
+    assert "az login" in c.remediation
     assert "DefaultAzureCredential" not in c.message
 
 
@@ -77,7 +78,8 @@ def test_application_insights_warns_when_unconfigured(monkeypatch) -> None:
     monkeypatch.delenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", raising=False)
     c = _check_application_insights_env()
     assert c.status == "warn"
-    assert "App Insights" in c.message
+    assert "production telemetry" in c.message.lower()
+    assert "App Insights" in c.remediation
 
 
 def test_run_preflight_collects_all_checks(tmp_path: Path, monkeypatch) -> None:
@@ -106,12 +108,38 @@ def test_run_preflight_collects_all_checks(tmp_path: Path, monkeypatch) -> None:
 
 def test_format_report_renders_status_glyphs() -> None:
     report = PreflightReport(checks=[
-        PreflightCheck(name="workspace", status="ok", message="/tmp/x"),
-        PreflightCheck(name="azure_auth", status="fail", message="Run `az login`."),
-        PreflightCheck(name="app_insights", status="warn", message="not configured"),
-        PreflightCheck(name="foundry_project", status="skip", message="env missing"),
+        PreflightCheck(name="workspace", display_name="Workspace",
+                       status="ok", message="/tmp/x"),
+        PreflightCheck(name="azure_auth", display_name="Azure authentication",
+                       status="fail", message="Not signed in to Azure.",
+                       remediation="Run `az login` in this terminal."),
+        PreflightCheck(name="app_insights", display_name="Application Insights",
+                       status="warn", message="No connection string available.",
+                       remediation="Wire App Insights in Foundry."),
+        PreflightCheck(name="foundry_project", display_name="Foundry project",
+                       status="skip", message="env var missing"),
     ])
     text = format_report(report, color=False)
-    assert "Pre-flight checks" in text
-    assert "workspace" in text and "ok" in text
-    assert "az login" in text  # fail rendered with humanized message
+    # Headline counts.
+    assert "AgentOps pre-flight" in text
+    assert "1 ok" in text and "1 warning" in text and "1 failed" in text
+    # Display names render instead of internal ids.
+    assert "Workspace" in text and "Azure authentication" in text
+    # Remediation lines appear indented for warn / fail.
+    assert "Run `az login` in this terminal." in text
+    assert "Wire App Insights in Foundry." in text
+    # The arrow glyph leads each remediation row.
+    assert "\u2192" in text
+
+
+def test_format_report_collapses_to_one_line_when_all_ok() -> None:
+    report = PreflightReport(checks=[
+        PreflightCheck(name="workspace", display_name="Workspace",
+                       status="ok", message="/tmp/x"),
+        PreflightCheck(name="azure_auth", display_name="Azure authentication",
+                       status="ok", message="ARM token acquired"),
+    ])
+    text = format_report(report, color=False)
+    # Single line summary, no per-check rows.
+    assert "\n" not in text
+    assert "2 ok" in text
