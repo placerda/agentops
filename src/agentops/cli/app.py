@@ -753,6 +753,20 @@ def cmd_doctor(
             ),
         ),
     ] = None,
+    no_preflight: Annotated[
+        bool,
+        typer.Option(
+            "--no-preflight",
+            help="Skip the pre-flight connectivity checks.",
+        ),
+    ] = False,
+    strict_preflight: Annotated[
+        bool,
+        typer.Option(
+            "--strict-preflight",
+            help="Exit non-zero if any pre-flight check fails or warns.",
+        ),
+    ] = False,
 ) -> None:
     """Diagnose MLOps / security / responsible-AI gaps in this workspace.
 
@@ -775,11 +789,26 @@ def cmd_doctor(
     from agentops.agent.findings import Severity
     from agentops.agent.history import append_analysis, build_record
     from agentops.agent.report import render_report
+    from agentops.services.preflight import (
+        format_report,
+        run_preflight,
+    )
     from agentops.utils import telemetry
     import time as _time
 
     workspace = workspace.resolve()
     resolved_config = _resolve_agent_config_path(workspace, config_path)
+
+    if not no_preflight:
+        report = run_preflight(workspace, scope="doctor")
+        typer.echo(format_report(report), err=True)
+        if report.has_failures or (strict_preflight and report.has_warnings):
+            typer.echo(
+                "Pre-flight failed. Resolve the issues above or re-run "
+                "with `--no-preflight` to bypass.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
     try:
         config = load_agent_config(resolved_config)
@@ -974,6 +1003,13 @@ def cmd_dashboard(
             help="Project root containing `.agentops/agent/history.jsonl`.",
         ),
     ] = Path("."),
+    no_preflight: Annotated[
+        bool,
+        typer.Option(
+            "--no-preflight",
+            help="Skip the pre-flight connectivity checks.",
+        ),
+    ] = False,
 ) -> None:
     """Open the local AgentOps dashboard.
 
@@ -1006,8 +1042,21 @@ def cmd_dashboard(
     import webbrowser
 
     from agentops.agent.dashboard import create_app as create_dashboard_app
+    from agentops.services.preflight import format_report, run_preflight
 
     workspace = workspace.resolve()
+
+    if not no_preflight:
+        report = run_preflight(workspace, scope="dashboard")
+        typer.echo(format_report(report), err=True)
+        if report.has_failures:
+            typer.echo(
+                "Pre-flight failed. Resolve the issues above or re-run "
+                "with `--no-preflight` to bypass.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
     fastapi_app = create_dashboard_app(workspace=workspace)
     url = f"http://{host}:{port}"
 

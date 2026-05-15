@@ -338,3 +338,48 @@ def test_workflow_sha_pinning_skips_local_actions(workspace: Path) -> None:
     assert "opex.workflow_action_sha_pinning" not in _ids(
         run_opex_workspace_check(workspace)
     )
+
+
+# ---------------------------------------------------------------------------
+# AI.26 max_tokens limit (opex.max_tokens_undefined)
+# ---------------------------------------------------------------------------
+
+
+def test_max_tokens_undefined_fires_when_bundle_lacks_max_tokens(tmp_path: Path) -> None:
+    (tmp_path / "agentops.yaml").write_text(
+        "version: 1\nagent: my-agent:2\n", encoding="utf-8"
+    )
+    bundles = tmp_path / ".agentops" / "bundles"
+    bundles.mkdir(parents=True)
+    (bundles / "default.yaml").write_text(
+        "version: 1\nevaluators:\n  - GroundednessEvaluator\n",
+        encoding="utf-8",
+    )
+    findings = run_opex_workspace_check(tmp_path)
+    f = next((f for f in findings if f.id == "opex.max_tokens_undefined"), None)
+    assert f is not None
+    assert "default.yaml" in f.evidence["files_without_max_tokens"][0]
+
+
+def test_max_tokens_undefined_silent_when_every_file_declares_it(tmp_path: Path) -> None:
+    (tmp_path / "agentops.yaml").write_text(
+        "version: 1\nagent: my-agent:2\nmodel: gpt-4o-mini\nmax_tokens: 800\n",
+        encoding="utf-8",
+    )
+    bundles = tmp_path / ".agentops" / "bundles"
+    bundles.mkdir(parents=True)
+    (bundles / "default.yaml").write_text(
+        "version: 1\nevaluators:\n  - GroundednessEvaluator\nmodel_config:\n  max_tokens: 500\n",
+        encoding="utf-8",
+    )
+    findings = run_opex_workspace_check(tmp_path)
+    assert not any(f.id == "opex.max_tokens_undefined" for f in findings)
+
+
+def test_max_tokens_undefined_silent_when_no_model_shaped_files(tmp_path: Path) -> None:
+    # Empty workspace - no model / evaluator / deployment keys anywhere.
+    (tmp_path / "agentops.yaml").write_text(
+        "version: 1\nagent: my-agent:2\n", encoding="utf-8"
+    )
+    findings = run_opex_workspace_check(tmp_path)
+    assert not any(f.id == "opex.max_tokens_undefined" for f in findings)

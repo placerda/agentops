@@ -369,7 +369,7 @@ def test_genai_tracing_env_var_not_overwritten_if_user_set_it(
 def test_azure_monitor_queries_requests_and_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, str | None] = {}
+    captured: dict[str, object] = {"queries": []}
 
     azure_module = types.ModuleType("azure")
     identity_module = types.ModuleType("azure.identity")
@@ -412,7 +412,7 @@ def test_azure_monitor_queries_requests_and_dependencies(
             timespan: object,
         ) -> Response:
             captured["resource_id"] = resource_id
-            captured["query"] = query
+            captured["queries"].append(query)  # type: ignore[union-attr]
             captured["timespan"] = str(timespan)
             return Response()
 
@@ -436,7 +436,10 @@ def test_azure_monitor_queries_requests_and_dependencies(
         lookback_days=7,
     )
 
-    assert "union isfuzzy=true requests, dependencies" in str(captured["query"])
+    assert any(
+        "union isfuzzy=true requests, dependencies" in str(q)
+        for q in captured["queries"]  # type: ignore[union-attr]
+    )
     assert payload.diagnostics["status"] == "ok"
     assert payload.request_count == 2
     assert payload.error_count == 1

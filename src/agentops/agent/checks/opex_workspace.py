@@ -52,6 +52,7 @@ def run_opex_workspace_check(workspace: Path) -> List[Finding]:
     findings.extend(_check_changelog(workspace))
     findings.extend(_check_workflow_concurrency(workspace))
     findings.extend(_check_workflow_sha_pinning(workspace))
+    findings.extend(_check_max_tokens_limit(workspace))
 
     return findings
 
@@ -590,3 +591,89 @@ def _safe_load_yaml(path: Path) -> Optional[dict]:
     except (OSError, yaml.YAMLError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _check_max_tokens_limit(workspace: Path) -> List[Finding]:
+    """AI.26 — every model deployment / call should set a ``max_tokens`` limit.
+
+    Without an upper bound, a runaway prompt or a malicious user can
+    drive the bill arbitrarily high. We look in two places:
+
+    * ``agentops.yaml`` at the project root.
+    * Every ``*.yaml`` under ``.agentops/bundles/`` (evaluator bundles
+      that drive eval-time model calls).
+
+    The check is permissive: it fires only when at least one file
+    explicitly looks like it configures a model (has ``model:``,
+    ``deployment:``, or an ``evaluators:`` list) **and** none of the
+    candidate files declares ``max_tokens``. That avoids false
+    positives on bare workspaces / agent-only configs.
+    """
+    candidates: List[Path] = []
+    root = workspace / "agentops.yaml"
+    if root.exists():
+        candidates.append(root)
+    bundles_dir = workspace / ".agentops" / "bundles"
+    if bundles_dir.is_dir():
+        candidates.extend(sorted(bundles_dir.glob("*.y*ml")))
+    if not candidates:
+        return []
+
+    looks_model_shaped = False
+    files_with_max_tokens: List[str] = []
+    files_without_max_tokens: List[str] = []
+
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        # Cheap, format-agnostic detection: matches `max_tokens: <n>`
+        # at any nesting level in any of the candidate YAMLs.
+        if re.search(r"(?m)^\s*max_tokens\s*:", text):
+            files_with_max_tokens.append(str(path.relative_to(workspace)).replace("\\", "/"))
+            looks_model_shaped = True
+            continue
+        # Only count files that actually look like they configure a model.
+        if re.search(
+            r"(?m)^\s*(model|deployment|evaluators)\s*:",
+            text,
+        ):
+            looks_model_shaped = True
+            files_without_max_tokens.append(
+                str(path.relative_to(workspace)).replace("\\", "/")
+            )
+
+    if not looks_model_shaped:
+        return []
+    if files_with_max_tokens and not files_without_max_tokens:
+        return []
+    if not files_without_max_tokens:
+        return []
+
+    return [
+        Finding(
+            id="opex.max_tokens_undefined",
+            severity=Severity.WARNING,
+            category=Category.OPERATIONAL_EXCELLENCE,
+            title="`max_tokens` is not set on model / evaluator configuration",
+            summary=(
+                "Found model / evaluator YAML files that do not declare "
+                "a `max_tokens:` ceiling. Without an upper bound a single "
+                "runaway completion or a malicious prompt can drive token "
+                "spend arbitrarily high."
+            ),
+            recommendation=(
+                "Add a `max_tokens:` field next to each `model:` / "
+                "`deployment:` block (and inside `model_config:` for "
+                "AI-assisted evaluators). Pick a value just above your "
+                "longest legitimate response so legitimate traffic isn't "
+                "truncated."
+            ),
+            source=SOURCE_NAME,
+            evidence={
+                "files_without_max_tokens": files_without_max_tokens[:10],
+                "files_with_max_tokens": files_with_max_tokens[:10],
+            },
+        )
+    ]
