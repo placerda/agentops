@@ -46,15 +46,9 @@ Two of the four sources, `azure_monitor` and `foundry_control`, are
 treated specially: the Doctor also runs a dedicated check on whether
 that source is actually wired up.
 
-The reason is the **GenAIOps Maturity Model** (see section 7). The
-model assigns a level (L0 to L4) by looking at which findings are
-*absent*. If the Doctor stayed silent when a project never even
-configured App Insights, the model would happily declare that
-project "Optimised" (L4): no production-monitoring problems were
-detected because there is no production monitoring at all to
-detect them with. That is a false promotion.
-
-To prevent it, two dedicated rules fire when a wiring gap exists:
+The reason: two dedicated rules fire when a wiring gap exists, so a
+project that never even configured App Insights does not show up as
+"all clear" simply because there is no production monitoring to grade.
 
 * `errors.no_runtime_telemetry` fires when `azure_monitor` is
   skipped (no `app_insights_resource_id`) or returns an empty
@@ -65,8 +59,8 @@ To prevent it, two dedicated rules fire when a wiring gap exists:
 
 Both rules stay silent when the source is explicitly
 `enabled: false`. That is how you tell the Doctor "this project does
-not use that backend" - the maturity model then treats the missing
-backend as a deliberate opt-out rather than a gap.
+not use that backend" - the missing backend is treated as a
+deliberate opt-out rather than a gap.
 
 ### Extension point: Microsoft 365 Copilot agents
 
@@ -100,9 +94,9 @@ behaviour:
   actions / connectors call out without authentication, bypassing
   tenant DLP.
 
-The maturity model would treat the first two as L2 / L3 blockers
-only when the source is opted in. The remaining five are governance
-signals that fit naturally next to the existing Operational Excellence rules.
+The first two are workflow-hygiene gaps; the remaining five are
+governance signals that fit naturally next to the existing
+Operational Excellence rules.
 
 This is a real follow-up, not a quick add: it brings a new dependency
 (`msgraph-sdk` or `msal` + raw HTTP), a new auth flow (tenant-level
@@ -207,11 +201,6 @@ checks:
 ...
 ### MLOps / pipeline hygiene
 ...
-
-## GenAIOps Maturity               ← the bottom line for an eng-manager
-- Current level: L2 - Repeatable
-- Next gap: errors.no_runtime_telemetry
-- Reference: Microsoft GenAIOps Maturity Model
 ```
 
 Each finding has its own detail block with **Severity**, **Category**,
@@ -235,26 +224,7 @@ The default `--severity-fail critical` is good for "fail the PR".
 `--severity-fail warning` is good for nightly cron jobs that want to
 catch drift before it gets bad.
 
-## 7. The GenAIOps Maturity Model
-
-The Doctor computes a maturity level for the project on every run,
-anchored to the public **Microsoft GenAIOps Maturity Model**
-(https://techcommunity.microsoft.com/blog/azure-ai-services-blog/genaiops).
-
-| Level | Name | Doctor signal |
-|---|---|---|
-| L0 | Ad-hoc | No `.agentops/results/` runs yet. |
-| L1 | Initial | Eval runs exist but no PR gate. |
-| L2 | Repeatable | PR gate green; no deploy workflows or no production telemetry. |
-| L3 | Managed | Deploy + telemetry wired; no continuous evaluation or a metric is flaky. |
-| L4 | Optimised | All gating signals green. |
-
-The maturity block at the bottom of `report.md` (and the badge on the
-dashboard) names the current level *and the next concrete gap*, so
-moving up is one finding away. The score is informational - it does
-not affect exit codes.
-
-## 8. LLM-judged checks
+## 7. LLM-judged checks
 
 Every deterministic check listed above is fast, reproducible, and free
 to run in CI. But it leaves a class of signals on the table: anything
@@ -379,11 +349,11 @@ members and CI.
   truth for the *categories* of items (security, reliability,
   performance, operational excellence) and for the WAF pillar /
   area labels in the knowledge base CSV.
-- **Microsoft GenAIOps Maturity Model**  - 
-  https://techcommunity.microsoft.com/blog/azure-ai-services-blog/opex.
-  Source of truth for the L0–L4 progression. Doctor maps its findings
-  onto this model so the score communicates *what's missing*, not just
-  a number.
+- **Microsoft Azure AI Landing Zones Checklist**  - 
+  https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/ai/.
+  Source of truth for the curated set of Azure-specific checks that
+  ship in `.agentops/waf-checklist.csv`. Each Doctor finding cites
+  the matching WAF item and links to the Microsoft Learn page.
 
 ## 11. Next steps
 

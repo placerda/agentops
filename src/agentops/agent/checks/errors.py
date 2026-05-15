@@ -93,8 +93,8 @@ def _check_no_runtime_telemetry(
 ) -> List[Finding]:
     """Warn when Azure Monitor is not wired, or wired but silent.
 
-    Two failure modes count, both blockers for L3 in the GenAIOps
-    Maturity Model:
+    Two failure modes count, both blockers for production
+    observability:
 
     * **Not configured.** The ``azure_monitor`` source is enabled but
       has no ``app_insights_resource_id`` / ``log_analytics_workspace_id``,
@@ -139,7 +139,7 @@ def _check_no_runtime_telemetry(
             f"({diag.get('reason') or 'unknown reason'}). Without "
             "App Insights wired up, Doctor has no production "
             "observability, so latency, errors, runtime safety, and "
-            "telemetry-based maturity all stay grey."
+            "telemetry-based reliability checks all stay grey."
         )
         evidence = {
             "monitor_status": status,

@@ -456,30 +456,6 @@ def _build_watchdog_section(records: List[AnalysisRecord]) -> Dict[str, Any]:
             },
         ],
         "latest_findings": latest_findings,
-        "maturity": _maturity_for_dashboard(latest),
-    }
-
-
-def _maturity_for_dashboard(
-    latest: Optional[AnalysisRecord],
-) -> Optional[Dict[str, Any]]:
-    """Project the GenAIOps maturity assessment onto the dashboard payload."""
-    from agentops.agent.maturity import compute_level_from_ids
-
-    if latest is None:
-        return None
-    finding_ids = [
-        str(f.get("id") or "") for f in (latest.findings or []) if isinstance(f, dict)
-    ]
-    assessment = compute_level_from_ids(
-        finding_ids=[fid for fid in finding_ids if fid],
-        has_history=True,
-    )
-    return {
-        "level": assessment.level,
-        "label": assessment.label,
-        "next_gap": assessment.next_gap,
-        "explanation": assessment.explanation,
     }
 
 
@@ -2290,31 +2266,12 @@ def render_dashboard_html(payload: Dict[str, Any]) -> str:
         )
     watchdog_title = f"Doctor findings{compliance_link}"
 
-    maturity_block = ""
-    maturity = watchdog.get("maturity") if isinstance(watchdog, dict) else None
-    if maturity:
-        next_gap = maturity.get("next_gap")
-        gap_html = (
-            f' &mdash; next gap: <code>{_html_escape(str(next_gap))}</code>'
-            if next_gap and next_gap != "no_history"
-            else ""
-        )
-        maturity_block = (
-            '<div class="maturity-badge" '
-            'title="GenAIOps Maturity Model (Microsoft)">'
-            f'<strong>Maturity: L{int(maturity.get("level", 0))} '
-            f'&mdash; {_html_escape(str(maturity.get("label", "")))}</strong>'
-            f'{gap_html}'
-            '</div>'
-        )
-
     if watchdog["has_history"]:
         watchdog_headline = "".join(
             _render_card(c, hero=True) for c in watchdog["headline_cards"]
         )
         findings_list = _render_findings_list(watchdog.get("latest_findings") or [])
         watchdog_body = (
-            f'{maturity_block}'
             f'<div class="grid">{watchdog_headline}</div>'
             f'{findings_list}'
         )
@@ -2637,23 +2594,6 @@ _DASHBOARD_TEMPLATE = """<!doctype html>
     font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
     text-transform: uppercase; vertical-align: middle;
     animation: live-pulse 2s ease-in-out infinite;
-  }}
-  .maturity-badge {{
-    margin: 0 0 14px;
-    padding: 8px 12px;
-    border-radius: 8px;
-    background: rgba(96, 165, 250, 0.10);
-    border: 1px solid rgba(96, 165, 250, 0.35);
-    color: var(--fg);
-    font-size: 13px;
-  }}
-  .maturity-badge strong {{
-    margin-right: 6px;
-  }}
-  .maturity-badge code {{
-    background: rgba(0, 0, 0, 0.25);
-    padding: 1px 6px; border-radius: 4px;
-    font-size: 12px;
   }}
   .ai-badge {{
     display: inline-block;

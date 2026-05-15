@@ -9,7 +9,6 @@ from typing import Dict, List
 from agentops.agent.analyzer import AnalysisResult
 from agentops.agent.findings import Category, Finding, Severity, severity_emoji
 from agentops.agent.knowledge import find_waf_item
-from agentops.agent.maturity import MaturityAssessment, compute_level
 
 _CATEGORY_ORDER: List[Category] = [
     Category.QUALITY,
@@ -163,23 +162,6 @@ def render_report(result: AnalysisResult) -> str:
         lines.append("")
         lines.append("_No findings - all configured checks passed._")
         lines.append("")
-
-    # GenAIOps Maturity Model summary
-    maturity = compute_level(result.findings, result.history)
-    lines.append("## GenAIOps Maturity")
-    lines.append("")
-    lines.append(
-        f"- **Current level:** L{maturity.level} - {maturity.label}"
-    )
-    if maturity.next_gap and maturity.next_gap != "no_history":
-        lines.append(f"- **Next gap:** `{maturity.next_gap}`")
-    if maturity.explanation:
-        lines.append(f"- {maturity.explanation}")
-    lines.append(
-        "- _Reference: Microsoft GenAIOps Maturity Model - "
-        "https://techcommunity.microsoft.com/blog/azure-ai-services-blog/genaiops_"
-    )
-    lines.append("")
 
     # History appendix
     if result.history and result.history.runs:
