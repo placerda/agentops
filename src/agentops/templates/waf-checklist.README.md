@@ -36,7 +36,7 @@ public **Microsoft Azure AI Landing Zones Checklist** (177 items).
 | `detection_source` | Doctor source(s) that can reach this signal — `results_history`, `azure_monitor`, `foundry_control`, `azure_resources`, `workspace_files`, or `manual`. |
 | `detection_signal` | Short description of how the rule checks the signal (or the artifact that proves compliance when `manual`). |
 | `doctor_check_id` | The finding id Doctor emits. `manual.<pillar>.<x>` is reserved for items with no automated rule today. **A row with this column empty is ignored by the loader.** |
-| `status` | `implemented` (a rule fires today), `planned` (data source reachable, rule on the roadmap), or `manual` (audit-only). |
+| `status` | `implemented` (a rule fires today and surfaces this signal automatically) or `manual` (audit-only — Doctor cannot verify; the team is responsible for the review). |
 | `reference_url` | Public Microsoft Learn URL for the WAF pillar. |
 
 ## How to extend
@@ -62,11 +62,18 @@ Two practical rules to keep in mind:
 
 ## Distribution of the seed shortlist
 
-| Pillar | Items | Implemented | Planned | Manual |
-|---|---:|---:|---:|---:|
-| Security | 10 | 6 | 0 | 4 |
-| OperationalExcellence | 10 | 7 | 1 | 2 |
-| Reliability | 10 | 3 | 3 | 4 |
-| Performance | 10 | 3 | 1 | 6 |
-| Cost | 10 | 0 | 2 | 8 |
-| **Total** | **50** | **19** | **7** | **24** |
+The seed file ships only items where the Doctor has a **working,
+deterministic rule today** (`implemented`) or where the item is an
+**audit step that requires human judgement** (`manual`). We
+intentionally do not ship `planned` items — they add a "we will do
+this later" promise that is easy to forget. New rules earn their
+spot in this file when they actually run, not before.
+
+| Pillar | Items | Implemented | Manual |
+|---|---:|---:|---:|
+| Security | 10 | 6 | 4 |
+| OperationalExcellence | 9 | 7 | 2 |
+| Reliability | 7 | 3 | 4 |
+| Performance | 9 | 3 | 6 |
+| Cost | 8 | 0 | 8 |
+| **Total** | **43** | **19** | **24** |
