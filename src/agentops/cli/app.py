@@ -1128,20 +1128,80 @@ def cmd_dashboard(
     typer.echo("")
     typer.echo("Press Enter (or Ctrl+C) to stop the dashboard.")
 
+    # Silence uvicorn's own error logger so the friendly bind-failure
+    # message below is not preceded by a red traceback line. The
+    # access / info loggers stay at "warning" so legitimate startup
+    # warnings still surface.
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "loggers": {
+            "uvicorn":        {"level": "CRITICAL", "handlers": []},
+            "uvicorn.error":  {"level": "CRITICAL", "handlers": []},
+            "uvicorn.access": {"level": "CRITICAL", "handlers": []},
+        },
+    }
     config = uvicorn.Config(
-        fastapi_app, host=host, port=port, log_level="warning",
+        fastapi_app,
+        host=host,
+        port=port,
+        log_level="warning",
+        log_config=log_config,
     )
     server = uvicorn.Server(config)
 
-    server_thread = threading.Thread(target=server.run, daemon=True)
+    # Carry exceptions from the daemon thread back to the main one so
+    # we can render a friendly message instead of letting uvicorn's
+    # default error path leak.
+    bind_error: list[BaseException] = []
+
+    def _serve() -> None:
+        try:
+            server.run()
+        except BaseException as exc:  # noqa: BLE001
+            bind_error.append(exc)
+
+    server_thread = threading.Thread(target=_serve, daemon=True)
     server_thread.start()
 
     # Wait for uvicorn to actually bind before launching the browser so
     # the first GET does not race the server startup.
     for _ in range(40):  # up to ~2s
-        if getattr(server, "started", False):
+        if getattr(server, "started", False) or bind_error:
             break
         _time.sleep(0.05)
+
+    if bind_error:
+        exc = bind_error[0]
+        # WinError 10048 / EADDRINUSE / EACCES on the bind syscall.
+        is_port_collision = (
+            isinstance(exc, OSError)
+            and (
+                getattr(exc, "winerror", None) == 10048
+                or getattr(exc, "errno", None) in (48, 98, 13)
+            )
+        )
+        if is_port_collision:
+            typer.echo(
+                f"Port {port} is busy and the dashboard could not "
+                "bind to it. Common causes:\n"
+                f"  • a previous `agentops dashboard` is still "
+                "holding the socket (Windows TIME_WAIT, lasts up to "
+                "~2 min after Ctrl+C)\n"
+                "  • another local service is listening on the same "
+                "port\n"
+                "Fixes (pick one):\n"
+                f"  • wait ~2 minutes and re-run\n"
+                f"  • pick another port: agentops dashboard --port "
+                f"{port + 1}\n"
+                f"  • find the holder: PowerShell `Get-NetTCPConnection "
+                f"-LocalPort {port}`",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        typer.echo(f"Failed to start dashboard: {exc}", err=True)
+        raise typer.Exit(code=1)
+
     try:
         webbrowser.open(url, new=2)
     except Exception:  # noqa: BLE001 - never fail dashboard on a browser launch issue
