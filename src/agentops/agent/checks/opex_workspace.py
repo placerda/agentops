@@ -49,7 +49,6 @@ def run_opex_workspace_check(workspace: Path) -> List[Finding]:
     findings.extend(_check_dataset_versioning(workspace))
     findings.extend(_check_bundle_versioning(workspace))
     findings.extend(_check_results_dir_bloat(workspace))
-    findings.extend(_check_changelog(workspace))
     findings.extend(_check_workflow_concurrency(workspace))
     findings.extend(_check_workflow_sha_pinning(workspace))
     findings.extend(_check_max_tokens_limit(workspace))
@@ -378,7 +377,7 @@ def _check_results_dir_bloat(workspace: Path) -> List[Finding]:
 
     Results directories grow unboundedly by design - every CI run
     writes a new timestamped folder. Past ~50 runs that's just clutter,
-    inflates clone times, and makes the dashboard slow. The fix is
+    inflates clone times, and makes the cockpit slow. The fix is
     either archival (move old runs to blob storage) or a rotation
     policy in CI.
     """
@@ -408,7 +407,7 @@ def _check_results_dir_bloat(workspace: Path) -> List[Finding]:
                 f"`.agentops/results/` holds {len(run_dirs)} run "
                 f"folders (threshold: {threshold}). Past this point "
                 "the directory mostly clutters clones, slows the "
-                "dashboard, and obscures the runs that actually "
+                "cockpit, and obscures the runs that actually "
                 "matter."
             ),
             recommendation=(
@@ -423,42 +422,6 @@ def _check_results_dir_bloat(workspace: Path) -> List[Finding]:
                 "run_count": len(run_dirs),
                 "threshold": threshold,
             },
-        )
-    ]
-
-
-def _check_changelog(workspace: Path) -> List[Finding]:
-    """Warn when a git-tracked workspace has no `CHANGELOG.md` at root.
-
-    WAF AI Operational Excellence asks projects to document and review
-    changes. A CHANGELOG is the de-facto auditable signal. We only nag
-    git repos - a scratch directory doesn't need this.
-    """
-    if not (workspace / ".git").exists():
-        return []
-    for name in ("CHANGELOG.md", "CHANGELOG.MD", "Changelog.md", "changelog.md"):
-        if (workspace / name).is_file():
-            return []
-    return [
-        Finding(
-            id="opex.no_changelog",
-            severity=Severity.WARNING,
-            category=Category.OPERATIONAL_EXCELLENCE,
-            title="Repository has no CHANGELOG.md",
-            summary=(
-                "No `CHANGELOG.md` at the workspace root. WAF AI "
-                "Operational Excellence asks teams to document and "
-                "review changes; a changelog is the auditable trail "
-                "for prompt, dataset, and bundle edits across "
-                "releases."
-            ),
-            recommendation=(
-                "Add a `CHANGELOG.md` following Keep a Changelog "
-                "format (https://keepachangelog.com). Update it on "
-                "every release with the prompt, dataset, bundle, "
-                "and threshold changes that landed."
-            ),
-            source=SOURCE_NAME,
         )
     ]
 

@@ -9,8 +9,9 @@ The Doctor agent gives the GenAIOps / DevOps engineer a single command
 (and a Copilot Chat extension) that answers the question *"are my
 agents healthy in production?"* by combining four signal sources:
 
-1. **AgentOps eval history** - every `.agentops/results/*/results.json`
-   the pipeline has produced.
+1. **AgentOps eval history** - local `.agentops/results/*/results.json`
+   first, with Foundry cloud evaluation runs as fallback when local
+   history is missing or too short.
 2. **Azure Monitor / Application Insights** - Foundry agent telemetry
    queried via KQL.
 3. **Foundry control plane** - agent metadata, recent runs, and
@@ -20,7 +21,7 @@ agents healthy in production?"* by combining four signal sources:
    and judge model.
 
 > **Naming.** Earlier versions called this surface "Watchdog". The
-> CLI command (`agentops doctor`), the dashboard label, and this
+> CLI command (`agentops doctor`), the cockpit label, and this
 > tutorial were renamed to "Doctor" because that better matches the
 > mental model of a regular check-up: run it on a schedule, get a
 > verdict, act on findings. Function and module names inside the
@@ -109,7 +110,7 @@ Exit codes are CI-friendly:
 The Doctor warns explicitly when the App Insights workspace is
 reachable but reports zero requests over the lookback window
 (`errors.no_runtime_telemetry`). That state almost always means the
-agent runtime is not wired to telemetry, so the dashboard, latency,
+agent runtime is not wired to telemetry, so the cockpit, latency,
 errors, and runtime-safety checks have nothing to grade. The
 finding's recommendation walks you to the OpenTelemetry setup in
 [`tutorial-basic-foundry-agent.md`](tutorial-basic-foundry-agent.md).
@@ -138,17 +139,19 @@ checks:
 
 ## 4. Security posture audit (WAF-AI)
 
-The Doctor can also run a **read-only audit of the Azure footprint**
-hosting your agent against the [Microsoft Well-Architected Framework
-for AI workloads - Security pillar][waf-ai]. This is opt-in: the
-findings live in their own `security` category and are skipped unless
-both the `azure_resources` source and the `posture` check are enabled.
+The Doctor also runs a **read-only audit of the Azure footprint** hosting
+your agent against the [Microsoft Well-Architected Framework for AI
+workloads - Security pillar][waf-ai]. The `azure_resources` source and
+the `posture` check are enabled by default. Doctor first tries to infer
+the deployed resources from AZD metadata in `.azure/<env>/.env`, then
+from the Foundry project endpoint, and finally from explicit
+`.agentops/agent.yaml` values.
 
-Why is this opt-in? The telemetry checks use App Insights and Foundry
-metadata that you already configured in the previous step. Security
-posture requires management-plane reads against the Azure resource group,
-so the tutorial asks for the subscription, resource group, and Cognitive
-Services account explicitly instead of guessing them.
+This source still fails open: if the Azure SDK is missing, authentication
+is unavailable, RBAC is insufficient, or the resource match is ambiguous,
+Doctor records a diagnostic explaining what was skipped and how to
+configure it. It does not fail the whole analysis just because one Azure
+source could not be read.
 
 The audit ships three rules against the Cognitive Services /
 Azure OpenAI account. **Public-network access, private endpoints,
@@ -168,7 +171,7 @@ Required RBAC: **Reader** on the resource group (or on each individual
 resource), granted to whoever runs `agentops doctor` (your local
 identity locally, or the OIDC-federated identity in CI).
 
-Find the account to audit:
+If automatic discovery is ambiguous, find the account to audit:
 
 ```powershell
 $env:AZURE_SUBSCRIPTION_ID = az account show --query id -o tsv
@@ -186,7 +189,7 @@ Pick the account that hosts your Azure OpenAI / AI Services deployment:
 $cognitiveAccount = "<ai-services-or-azure-openai-account-name>"
 ```
 
-Enable in `.agentops/agent.yaml`:
+Pin the source explicitly in `.agentops/agent.yaml`:
 
 ```powershell
 @"

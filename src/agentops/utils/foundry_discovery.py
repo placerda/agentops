@@ -23,10 +23,10 @@ from typing import Optional, Tuple
 log = logging.getLogger(__name__)
 
 
-# Per-process cache so the dashboard does not re-query Foundry on every
+# Per-process cache so the cockpit does not re-query Foundry on every
 # page load. Successful results are remembered for a long window
 # (discovery rarely changes); failures are remembered for a short
-# window so transient blips do not pin the dashboard into the error
+# window so transient blips do not pin the cockpit into the error
 # state across many reloads.
 _SUCCESS_TTL_SECONDS = 30 * 60
 _FAILURE_TTL_SECONDS = 60
@@ -66,11 +66,11 @@ def resolve_appinsights_connection_with_reason(
     string and ``error_reason`` is ``None``. On failure, the
     connection string is ``None`` and ``error_reason`` is a short,
     user-actionable explanation suitable for surfacing in the
-    dashboard tile.
+    cockpit tile.
 
     Successful results are cached in-process for 30 minutes; failure
     results for 60 seconds (so a transient Foundry hiccup does not
-    pin the dashboard into the error state for half an hour).
+    pin the cockpit into the error state for half an hour).
     """
     if not project_endpoint:
         return None, "no AZURE_AI_FOUNDRY_PROJECT_ENDPOINT set"
@@ -85,7 +85,7 @@ def resolve_appinsights_connection_with_reason(
     except ImportError:
         reason = (
             "azure-ai-projects / azure-identity not installed in the "
-            "dashboard's Python environment. Install with "
+            "cockpit's Python environment. Install with "
             "`pip install azure-ai-projects azure-identity`."
         )
         log.debug(reason)
@@ -167,7 +167,7 @@ def resolve_appinsights_connection(project_endpoint: str) -> Optional[str]:
 
     Returns ``None`` on any failure. See
     :func:`resolve_appinsights_connection_with_reason` for the
-    diagnostic-aware variant used by the dashboard.
+    diagnostic-aware variant used by the cockpit.
     """
     conn, _ = resolve_appinsights_connection_with_reason(project_endpoint)
     return conn

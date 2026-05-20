@@ -89,10 +89,18 @@ def analyze(
     posture check to skip individual WAF rule ids on top of any
     exclusions configured in ``agent.yaml``.
     """
-    history = collect_results_history(workspace, config.sources.results_history)
     monitor = collect_azure_monitor(config.sources.azure_monitor, config.lookback_days)
     foundry = collect_foundry_control(config.sources.foundry_control)
-    resources = collect_azure_resources(config.sources.azure_resources)
+    history = collect_results_history(
+        workspace,
+        config.sources.results_history,
+        foundry_config=config.sources.foundry_control,
+    )
+    resources = collect_azure_resources(
+        config.sources.azure_resources,
+        workspace=workspace,
+        project_endpoint=(foundry.diagnostics or {}).get("endpoint"),
+    )
 
     posture_config = config.checks.posture
     if exclude_rules:

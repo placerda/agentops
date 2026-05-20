@@ -2,9 +2,24 @@
 
 This page is the canonical inventory of every check the AgentOps
 Doctor runs. Each row tells you the **finding id** that surfaces in
-`report.md` / the dashboard, the **WAF pillar** the check belongs to,
+`report.md` / the cockpit, the **WAF pillar** the check belongs to,
 the **data source** it reads, and the **detection signal** (the rule
 itself, in plain English).
+
+> **Tip:** the same catalog is browsable from the terminal:
+>
+> ```bash
+> agentops doctor explain                    # paged manual: sources + flow
+> agentops doctor explain --open             # browser-friendly copy for printing
+> agentops doctor explain -f markdown -o doctor.md
+> ```
+>
+> Use `agentops doctor --help` for terse syntax and options. Use
+> `agentops doctor explain` for the Linux-style command manual, including
+> sources, execution flow, examples, and the check catalog. Add `--open`
+> when you want a printable browser view, or `--format markdown --out` when
+> you want a shareable document. Use this page for the deeper "how each
+> rule detects the signal" reference.
 
 Two conventions across the table:
 
@@ -24,13 +39,18 @@ The Doctor reaches Azure through five sources, all configured in
 | Source | Reads |
 |---|---|
 | `workspace_files` | `.agentops/`, `agentops.yaml`, `.github/workflows/`, `CHANGELOG.md`, spec-kit / `AGENTS.md` |
-| `results_history` | `.agentops/results/*/results.json` (local eval history) |
+| `results_history` | Local `.agentops/results/*/results.json` first; Foundry cloud evaluation runs as fallback when local history is missing or too short |
 | `azure_monitor` | Application Insights / Log Analytics via REST (KQL) |
 | `foundry_control` | Foundry project / agents / evaluation rules via `azure-ai-projects` |
-| `azure_resources` | Cognitive Services account properties via `azure-mgmt-cognitiveservices` |
+| `azure_resources` | Cognitive Services account properties via `azure-mgmt-cognitiveservices`; inferred from explicit config, AZD `.azure/<env>/.env`, or Foundry endpoint/account matching |
 
 The LLM-judged rules additionally use the Foundry project's OpenAI
 client (auto-discovered) as the judge model.
+
+Azure sources fail open. When Doctor cannot authenticate, infer an AZD
+environment, match a single Azure AI account, or read a resource, it
+records a diagnostic with the reason and suggested setup step instead of
+stopping the whole run.
 
 ## Catalogue
 
@@ -57,25 +77,20 @@ client (auto-discovered) as the judge model.
 | `opex.unversioned_dataset` | warning | `workspace_files` | programmatic | dataset YAMLs lack a top-level `version:` |
 | `opex.unversioned_bundle` | warning | `workspace_files` | programmatic | bundle YAMLs lack a top-level `version:` |
 | `opex.results_dir_bloat` | warning | `workspace_files` | programmatic | `.agentops/results/` holds > 50 run folders |
-| `opex.no_changelog` | warning | `workspace_files` | programmatic | git repo without `CHANGELOG.md` |
 | `opex.workflow_concurrency_lock` | warning | `workspace_files` | programmatic | AgentOps workflows missing a top-level `concurrency:` block |
 | `opex.workflow_action_sha_pinning` | warning | `workspace_files` | programmatic | `uses:` pinned to tag instead of 40-char SHA |
 | `opex.no_foundry_control_configured` | warning | `foundry_control` | programmatic | Foundry control plane unreachable |
-| `opex.no_foundry_agents` | warning | `foundry_control` | programmatic | Foundry project lists 0 agents |
 | `opex.stale_evaluation` | warning / critical | `results_history` | programmatic | latest run older than `stale_after_days` (critical at 2×) |
 | `opex.flaky_metric.<metric>` | warning | `results_history` | programmatic | coefficient of variation across last N runs > `flaky_cv_threshold` |
 | `opex.no_token_telemetry` | warning | `azure_monitor` | programmatic | `request_count > 0` but `gen_ai.usage.input_tokens + output_tokens == 0` |
 | `opex.max_tokens_undefined` | warning | `workspace_files` | programmatic | no `max_tokens:` declared in any `agentops.yaml` / bundle YAML that configures a model |
 | `opex.llm.bundle_coverage` | info / warning | `workspace_files` | llm-judged | judge compares bundle YAML against agent description and flags missing built-ins |
-| `opex.spec_conformance.spec_missing` | warning | `workspace_files` | programmatic | spec scaffolding present (`.specify/`, `AGENTS.md`) but no spec content |
-| `opex.spec_conformance.spec_empty` | info | `workspace_files` | programmatic | spec file has < 5 non-heading lines |
-| `opex.spec_conformance.tasks_stale` | warning | `workspace_files` | programmatic | `tasks.md` unchecked items older than `stale_after_days` |
+| `opex.spec_conformance.spec_missing` | warning | `workspace_files` | programmatic | spec-driven setup detected (`.specify/`, `AGENTS.md`, or Copilot instructions) but no readable spec body, so Doctor cannot verify bundles / datasets / tasks against intended agent behavior |
+| `opex.spec_conformance.tasks_stale` | warning | `workspace_files` | programmatic | unchecked task-list items in the spec have remained open past `stale_after_days`, which suggests the implementation plan may be stale or the task list was not maintained |
 | `opex.spec_conformance.tasks_orphaned` | warning | `workspace_files` | programmatic | checked task references a path missing from workspace |
-| `opex.spec_conformance.evaluator_drift` | warning | `workspace_files` | programmatic | evaluator mentioned in spec absent from every bundle |
-| `opex.spec_conformance.dataset_drift` | warning | `workspace_files` | programmatic | dataset mentioned in spec absent from `.agentops/datasets|data/` |
-| `opex.spec_conformance.agent_drift` | warning | `workspace_files` | programmatic | spec `agent_id` doesn't match `run.yaml` |
-| `opex.spec_conformance.copilot_instructions_missing_agentops` | info | `workspace_files` | programmatic | `copilot-instructions.md` never mentions AgentOps |
-| `opex.spec_conformance.changelog_unlinked_spec` | info | `workspace_files` | programmatic | spec mtime newer than CHANGELOG.md mtime |
+| `opex.spec_conformance.evaluator_drift` | warning | `workspace_files` | programmatic | evaluator mentioned in spec absent from `agentops.yaml` |
+| `opex.spec_conformance.dataset_drift` | warning | `workspace_files` | programmatic | dataset mentioned in spec absent from `.agentops/data/` |
+| `opex.spec_conformance.agent_drift` | warning | `workspace_files` | programmatic | spec `agent_id` doesn't match `agentops.yaml` |
 | `opex.spec_conformance.llm.implementation_gap` | info / warning | `workspace_files` | llm-judged | judge compares spec capabilities to workspace fingerprint |
 
 ### 🛟 Reliability

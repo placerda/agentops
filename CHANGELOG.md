@@ -20,7 +20,7 @@ This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres 
   `genaiops` category was renamed to `operational_excellence` to match
   the Microsoft Well-Architected Framework for AI pillar names. Every
   doctor finding id with the `genaiops.` prefix was renamed to `opex.`
-  (the WAF checklist, dashboard rows, report grouping, and CLI
+  (the WAF checklist, cockpit rows, report grouping, and CLI
   `--categories` flag are now all named consistently). The
   `checks/mlops.py` module was renamed to `checks/opex_workspace.py`
   and its function `run_mlops_check` to `run_opex_workspace_check`.
@@ -111,7 +111,7 @@ This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres 
 - **CLI refactored to entity-verb pattern** - All CLI commands now follow a consistent `<entity> <verb>` structure:
   - `agentops report` → `agentops report generate`
   - `agentops config cicd` → `agentops workflow generate` (new `workflow` entity)
-  - `agentops monitor dashboard` → `agentops monitor show`
+  - `agentops monitor cockpit` → `agentops monitor show`
   - `agentops monitor alert` → `agentops monitor configure`
 - **Skills refactored into modular skills** - 8 single-responsibility skills with `agentops-` prefix: `/agentops-eval` (run evaluations), `/agentops-config` (infer scenario + generate run.yaml), `/agentops-dataset` (generate JSONL + YAML datasets), `/agentops-report` (interpret and regenerate reports), `/agentops-regression` (investigate score drops), `/agentops-trace` (tracing stub), `/agentops-monitor` (monitoring stub), `/agentops-workflow` (CI/CD setup). Decomposed the monolithic `evals` skill into 4 focused skills. Each follows a standardized structure: Purpose, When to Use, Before You Start, Steps, Guardrails, Outputs.
 - **Run config model** - The configuration model uses an orthogonal `target`/`hosting`/`execution_mode` model. Configs missing a `version` field or containing a legacy `backend` key are rejected with an actionable error message.

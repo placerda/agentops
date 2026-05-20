@@ -1,5 +1,15 @@
 # Evaluation Bundles
 
+> **Historical reference (pre-1.0).** AgentOps 1.0 replaced the layered
+> `bundle.yaml` + `dataset.yaml` + `run.yaml` files with a single flat
+> `agentops.yaml`. Evaluators are now auto-selected from the agent type
+> and dataset columns; thresholds live inline in `agentops.yaml`. See
+> `docs/concepts.md` for the current model. The advanced `evaluators:`
+> escape hatch in `agentops.yaml` can still pin specific evaluators, but
+> the named-bundle catalog described below is no longer how the toolkit
+> ships. This page is retained for users who encounter pre-1.0 references
+> in older blog posts or repos.
+
 An **evaluation bundle** defines which evaluators run against your target and what quality thresholds must be met. Each bundle is a standalone YAML file stored in `.agentops/bundles/`.
 
 ## Predefined Bundles

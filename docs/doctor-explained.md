@@ -1,6 +1,7 @@
 # The AgentOps Doctor, explained
 
-A 10-minute read for a developer or engineering manager who runs
+A 10-minute read for a platform, observability, or AI engineer (and
+the engineering managers who own those teams) who runs
 `agentops doctor` for the first time. For step-by-step setup, see
 [`tutorial-agent-doctor.md`](tutorial-agent-doctor.md).
 
@@ -31,14 +32,15 @@ floor, `1` = the analyzer itself errored.
 
 | Source | Reads | Feeds these checks | When it's "ok" |
 |---|---|---|---|
-| `results_history` | `.agentops/results/*/results.json` | `regression`, `latency` (eval), `safety` (eval layer), `opex` (stale + flaky) | At least one run on disk. |
+| `results_history` | Local `.agentops/results/*/results.json`; Foundry cloud evaluation runs as fallback | `regression`, `latency` (eval), `safety` (eval layer), `opex` (stale + flaky) | At least one local run or a reachable Foundry project with cloud evaluations. |
 | `azure_monitor` | App Insights / Log Analytics via KQL | `latency` (p95), `errors` (rate + no-telemetry), `safety` (runtime layer) | Source `enabled: true` + connection reachable. |
 | `foundry_control` | Agents, runs, evaluation rules via `azure-ai-projects` | `errors` (Foundry runs), `safety` (continuous-eval rules), `operational_excellence` (Foundry config audit) | `enabled: true` + project endpoint set. |
-| `azure_resources` | Cognitive Services account + diagnostic settings via `azure-mgmt-*` | `posture` (WAF-AI Security pillar) | `enabled: true` + Reader RBAC on the resource group. |
+| `azure_resources` | Cognitive Services account + diagnostic settings via `azure-mgmt-*` | `posture` (WAF-AI Security pillar) | Enabled by default. Doctor uses explicit config first, then AZD `.azure/<env>/.env`, then Foundry endpoint/account matching. Reader RBAC is required on the resource group. |
 
-Each source **fails open**: if it's not configured or its SDK isn't
-installed, the Doctor reports it as `skipped` in the diagnostics block
-and moves on. Other checks keep working.
+Each source **fails open**: if it's not configured, cannot be inferred, or
+its SDK isn't installed, the Doctor reports it as `skipped` in the
+diagnostics block with the reason and next setup step. Other checks keep
+working.
 
 ### Why two sources have "wiring" rules
 
@@ -46,16 +48,18 @@ Two of the four sources, `azure_monitor` and `foundry_control`, are
 treated specially: the Doctor also runs a dedicated check on whether
 that source is actually wired up.
 
-The reason: two dedicated rules fire when a wiring gap exists, so a
+The reason: dedicated rules fire when a wiring gap exists, so a
 project that never even configured App Insights does not show up as
 "all clear" simply because there is no production monitoring to grade.
 
 * `errors.no_runtime_telemetry` fires when `azure_monitor` is
   skipped (no `app_insights_resource_id`) or returns an empty
   workspace (zero requests over the lookback window).
-* `opex.no_foundry_control_configured` /
-  `opex.no_foundry_agents` fire when `foundry_control` is
-  skipped (no `project_endpoint`) or the project lists no agents.
+* `opex.no_foundry_control_configured` fires when `foundry_control` is
+  skipped (no `project_endpoint`) or cannot be read. A reachable Foundry
+  project with zero agents is treated as source context, not a finding,
+  because the agent may be deployed through HTTP, Container Apps, AKS, or
+  another runtime.
 
 Both rules stay silent when the source is explicitly
 `enabled: false`. That is how you tell the Doctor "this project does
@@ -113,7 +117,7 @@ current release.
 | `errors` | `reliability` | Are production errors / Foundry failures above threshold? *Or* is telemetry connected but silent? |
 | `safety` | `responsible_ai` | Three layers: eval content-safety hits, runtime content-filter triggers, missing / disabled continuous-eval rules. |
 | `posture` | `security` | WAF-AI Security pillar - local-auth, managed identity, diagnostic settings. |
-| `opex_workspace` | `operational_excellence` | Workspace hygiene - pinning, gates, deploy workflows, results gitignore, dataset/bundle versioning, CHANGELOG, workflow concurrency / SHA pinning. |
+| `opex_workspace` | `operational_excellence` | Workspace hygiene - pinning, gates, deploy workflows, results gitignore, dataset/bundle versioning, workflow concurrency / SHA pinning. |
 | `opex` | `operational_excellence` | Time-based - stale eval runs + flaky-metric drift. |
 | `spec_conformance` | `operational_excellence` | Does the implementation match the spec? (spec-kit `.specify/`, `AGENTS.md`, Copilot instructions.) |
 
@@ -143,15 +147,12 @@ Deterministic findings (all `info` / `warning`, never `critical`):
 
 | Finding id | Detection |
 |---|---|
-| `opex.spec_conformance.spec_missing` | Spec scaffolding present but no spec content. |
-| `opex.spec_conformance.spec_empty` | Spec file exists but is effectively blank. |
-| `opex.spec_conformance.tasks_stale` | Open `tasks.md` items older than `stale_after_days`. |
+| `opex.spec_conformance.spec_missing` | Spec-driven setup detected, but no readable spec body was found; Doctor cannot verify bundles, datasets, tasks, or implementation against intended agent behavior. |
+| `opex.spec_conformance.tasks_stale` | Unchecked task-list items in the spec have remained open past `stale_after_days`; Doctor treats this as a signal that the implementation plan may be stale, completed work was not checked off, or the spec was not refreshed after agent behavior changed. |
 | `opex.spec_conformance.tasks_orphaned` | Checked task references a file that doesn't exist. |
-| `opex.spec_conformance.evaluator_drift` | Spec mentions evaluators absent from every bundle. |
+| `opex.spec_conformance.evaluator_drift` | Spec mentions evaluators absent from `agentops.yaml`. |
 | `opex.spec_conformance.dataset_drift` | Spec mentions datasets absent from the workspace. |
-| `opex.spec_conformance.agent_drift` | Spec's agent id doesn't match `run.yaml`. |
-| `opex.spec_conformance.copilot_instructions_missing_agentops` | `copilot-instructions.md` never references AgentOps. |
-| `opex.spec_conformance.changelog_unlinked_spec` | Spec was modified after the last `CHANGELOG.md` entry. |
+| `opex.spec_conformance.agent_drift` | Spec's agent id doesn't match `agentops.yaml`. |
 
 Opt-in LLM gap-analysis
 (`opex.spec_conformance.llm.implementation_gap`) runs only when both
@@ -294,8 +295,8 @@ ephemeral CI sandbox with no Foundry credentials - set
 Every LLM-judged finding asks the judge for **two to four concrete,
 case-specific fixes** in addition to its risk verdict. Those land in
 the finding's `evidence.suggestions` list and are spliced into the
-recommendation block of `report.md`. The dashboard renders them in a
-collapsible **💡 Suggested fixes** panel next to each finding. The
+recommendation block of `report.md`. Cockpit renders them in a
+collapsible **Suggested fixes** panel next to each finding. The
 panel is read-only by design - the user reviews and applies; the
 Doctor itself does not write to files.
 
@@ -359,7 +360,8 @@ members and CI.
 
 - Walk through a full setup with Azure resources:
   [`tutorial-agent-doctor.md`](tutorial-agent-doctor.md).
-- See the same signals live: `agentops dashboard` (auto-opens in your
-  browser).
+- Open the workspace command center: `agentops cockpit` shows eval
+  history, Doctor findings, CI/CD status, telemetry readiness, and
+  Foundry/Azure navigation.
 - Audit a repo from CI: there's a ready-made GitHub Actions cron in
   the tutorial.

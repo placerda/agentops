@@ -12,7 +12,9 @@ from `agentops.yaml`).
 ## Step 0 - Prerequisites
 
 1. `pip install "agentops-toolkit @ git+https://github.com/Azure/agentops.git@develop"` if `agentops` is missing.
-2. `agentops init` if `agentops.yaml` does not exist.
+2. If `agentops.yaml` does not exist, run `agentops init` first (the init
+   wizard will prompt for the agent reference, project endpoint, and
+   dataset path, then create a starter `.agentops/data/smoke.jsonl`).
 
 ## Step 1 - Pick the columns
 

@@ -26,6 +26,12 @@ For a new repository or tutorial, start with the PR gate only:
 workflows only after environments, Azure auth, and real build/deploy
 commands are configured.
 
+AgentOps is **azd-first** for deployment. Do not invent a parallel
+deployment system and do not hand-write bespoke deploy scripts when azd
+can own the lifecycle. AgentOps should gate quality; `azd provision`,
+`azd deploy`, and azd hooks should own infrastructure, packaging, and
+deployment.
+
 ## Branch model assumed
 
 ```
@@ -84,6 +90,9 @@ Useful flags:
 - `--force` - overwrite existing workflow files.
 - `--kinds pr,dev,qa,prod` - generate a subset. Prefer `--kinds pr`
   until deploy environments are configured.
+- `--deploy-mode auto|placeholder|azd` - `auto` uses azd templates when
+  `azure.yaml` exists; `azd` forces `azd provision` / `azd deploy`
+  templates; `placeholder` keeps the generic stack-agnostic scaffold.
 - `--dir <path>` - non-default repo root.
 
 ## Step 2 - Configure environments and Azure auth
@@ -151,24 +160,56 @@ Already done in Step 2 - the `agentops-azure` service connection
 handles auth. Make sure the underlying service principal or managed
 identity has the **Azure AI User** role on the Foundry account.
 
-## Step 4 - Fill in the Build and Deploy placeholders
+## Step 4 - Use azd for deployment
 
-Each `agentops-deploy-*.yml` has a `Build (placeholder)` and a
-`Deploy (placeholder)` step. The dev template includes commented
-example snippets for the most common stacks. Replace them based on
-the user's stack:
+If the repo already has `azure.yaml`, generate azd-backed deployment
+workflows:
 
-- **Container Apps** - replace Build with `az acr build` and Deploy
-  with `az containerapp update --image ...`.
-- **App Service** - replace Build with the package step, Deploy with
-  `azure/webapps-deploy@v3`.
-- **Foundry hosted agent** - Build is typically empty; Deploy publishes
-  a new agent version (project-specific tooling).
-- **azd-managed app** - replace Build with `azd package` and Deploy
-  with `azd deploy --no-prompt` (set `AZURE_ENV_NAME` per environment).
+```bash
+agentops workflow generate --kinds pr,dev,qa,prod --deploy-mode azd --force
+```
 
-Don't invent commands you can't see in the user's repo. If the stack
-isn't obvious, ask.
+The deploy workflows will:
+
+1. run `azd env new ... || azd env select ...` in CI;
+2. run `azd provision --no-prompt` for DEV by default;
+3. run `azd provision --no-prompt` for QA/PROD only when manually
+   requested (`provision=true` in GitHub Actions or
+   `RUN_AZD_PROVISION=true` in Azure DevOps);
+4. run `agentops eval run` as the quality/safety gate;
+5. run `azd env refresh` on the deploy runner so a fresh CI workspace can
+   recover outputs from the previous infrastructure provision;
+6. run `azd deploy --no-prompt`.
+
+Set `AZURE_ENV_NAME` per GitHub Environment / Azure DevOps variable
+group if the user's azd env names are not exactly `dev`, `qa`, and
+`production`. Set `AZURE_LOCATION` when the azd template needs an
+explicit region.
+
+### If the user asks for "zero-trust deployment"
+
+Do **not** replicate azd. Do this instead:
+
+1. Inspect the app and ask only for missing critical choices (region,
+   target host, private networking yes/no if not obvious).
+2. Prefer an existing azd template or AVM-backed template that already
+   implements managed identity, RBAC-only data access, private endpoints
+   where required, and no secrets in source.
+3. Create or adapt `azure.yaml`, `infra/`, and azd-native hooks declared
+   in `azure.yaml` (`preprovision`, `postprovision`, `predeploy`,
+   `postdeploy`) as needed.
+4. Run `azd provision` to validate the infrastructure path.
+5. Re-run `agentops workflow generate --deploy-mode azd --force` so CI
+   delegates provision/deploy to azd.
+
+Never call ad-hoc hook scripts from the workflow (for example
+`./agentops/deploy.sh` or `./.azd/hooks/*`). If custom behavior is
+needed, put it behind azd's native hook mechanism in `azure.yaml`.
+
+If `azure.yaml` is missing and the user is not asking to create the
+deployment assets yet, generate `--kinds pr` only or use
+`--deploy-mode placeholder`. Do not ship DEV/QA/PROD workflows that
+pretend deployment is wired when azd is not ready.
 
 ## Step 5 - Branch protection
 
@@ -201,13 +242,14 @@ Common follow-ups:
 ## Guardrails
 
 - Do **not** invent CLI flags. The supported `workflow generate` flags
-  are `--force`, `--dir`, `--kinds`, `--platform`.
+  are `--force`, `--dir`, `--kinds`, `--platform`, and
+  `--deploy-mode`.
 - Do **not** push DEV/QA/PROD deploy workflows with placeholder
   Build/Deploy steps or missing OIDC variables; generate PR-only first.
 - Do **not** create parallel workflow files. Prefer editing the
   generated ones.
-- Do **not** auto-fill Build/Deploy with steps you can't justify from
-  the user's existing code. Ask before guessing.
+- Do **not** auto-fill deployment with raw Azure CLI steps that bypass
+  azd. AgentOps gates; azd provisions and deploys.
 - The four workflow names (`agentops-pr`, `agentops-deploy-dev`,
   `agentops-deploy-qa`, `agentops-deploy-prod`) are fixed - don't rename
   them or branch-protection wiring will break.

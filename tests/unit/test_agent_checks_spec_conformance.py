@@ -79,7 +79,7 @@ def test_agents_md_detector_extracts_references(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# spec_missing / spec_empty / disabled / auto-skip
+# spec_missing / disabled / auto-skip
 # ---------------------------------------------------------------------------
 
 
@@ -111,12 +111,12 @@ def test_spec_missing_fires_when_hint_paths_present_but_empty(tmp_path: Path) ->
     assert f.category == Category.OPERATIONAL_EXCELLENCE
 
 
-def test_spec_empty_fires_for_tiny_spec(tmp_path: Path) -> None:
+def test_tiny_spec_does_not_emit_cosmetic_finding(tmp_path: Path) -> None:
     _make_agents_md(tmp_path, "# Title only\n")
     findings = run_spec_conformance_check(
         tmp_path, SpecConformanceCheckConfig()
     )
-    assert "opex.spec_conformance.spec_empty" in _ids(findings)
+    assert findings == []
 
 
 # ---------------------------------------------------------------------------
@@ -237,39 +237,8 @@ def test_agent_drift_flags_mismatched_agent_id(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# copilot instructions + skip list + WAF citation
+# skip list + WAF citation
 # ---------------------------------------------------------------------------
-
-
-def test_copilot_instructions_missing_agentops(tmp_path: Path) -> None:
-    (tmp_path / ".github").mkdir()
-    (tmp_path / ".github" / "copilot-instructions.md").write_text(
-        "# Copilot guidance\n\nGenerate tests.\nUse pytest.\nDocument code.\n"
-        "Prefer type hints.\nUse pathlib.\n",
-        encoding="utf-8",
-    )
-    findings = run_spec_conformance_check(
-        tmp_path, SpecConformanceCheckConfig()
-    )
-    assert (
-        "opex.spec_conformance.copilot_instructions_missing_agentops"
-        in _ids(findings)
-    )
-
-
-def test_copilot_instructions_silent_when_agentops_mentioned(tmp_path: Path) -> None:
-    (tmp_path / ".github").mkdir()
-    (tmp_path / ".github" / "copilot-instructions.md").write_text(
-        "# Copilot guidance\nUse agentops for evals.\nBody.\nMore.\nMore.\n",
-        encoding="utf-8",
-    )
-    findings = run_spec_conformance_check(
-        tmp_path, SpecConformanceCheckConfig()
-    )
-    assert (
-        "opex.spec_conformance.copilot_instructions_missing_agentops"
-        not in _ids(findings)
-    )
 
 
 def test_skip_list_silences_specific_finding(tmp_path: Path) -> None:
@@ -282,14 +251,11 @@ def test_skip_list_silences_specific_finding(tmp_path: Path) -> None:
 def test_waf_citation_present_for_every_new_finding_id() -> None:
     new_ids = [
         "opex.spec_conformance.spec_missing",
-        "opex.spec_conformance.spec_empty",
         "opex.spec_conformance.tasks_stale",
         "opex.spec_conformance.tasks_orphaned",
         "opex.spec_conformance.evaluator_drift",
         "opex.spec_conformance.dataset_drift",
         "opex.spec_conformance.agent_drift",
-        "opex.spec_conformance.copilot_instructions_missing_agentops",
-        "opex.spec_conformance.changelog_unlinked_spec",
         "opex.spec_conformance.llm.implementation_gap",
     ]
     for fid in new_ids:

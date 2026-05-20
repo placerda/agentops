@@ -71,8 +71,8 @@ def _check_stale_evaluation(
             ),
             recommendation=(
                 "Run `agentops eval run` (locally or via CI) to "
-                "produce a fresh `results.json`, then re-run "
-                "`agentops doctor`."
+                "produce a fresh local `results.json` or Foundry cloud "
+                "evaluation, then re-run `agentops doctor`."
             ),
             source=SOURCE_NAME,
             evidence={

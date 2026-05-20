@@ -177,7 +177,7 @@ def _check_no_token_telemetry(
                 "(`gen_ai.usage.input_tokens` / "
                 "`gen_ai.usage.output_tokens`) are not being emitted, so "
                 "token-cost monitoring and the Tokens card on the "
-                "dashboard stay grey."
+                "cockpit stay grey."
             ),
             recommendation=(
                 "Wire the OpenAI instrumentor on the agent runtime "
@@ -233,7 +233,7 @@ def _check_no_runtime_telemetry(
             "Application Insights / Log Analytics is reachable but "
             "reports 0 requests over the lookback window. The "
             "agent runtime is not emitting telemetry, so the "
-            "dashboard, latency, errors, and runtime-safety "
+            "cockpit, latency, errors, and runtime-safety "
             "checks have nothing to grade."
         )
         evidence = {

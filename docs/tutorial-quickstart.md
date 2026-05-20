@@ -20,11 +20,11 @@ the new run against the baseline.
   quality deltas.
 - A doctor analysis (`agentops doctor`) that surfaces
   regressions across the run history.
-- A live local dashboard (`agentops dashboard`) that visualises eval
-  trends, quality metrics, and production telemetry pulled from the
-  Foundry project's Application Insights.
+- A local Cockpit (`agentops cockpit`) that brings eval history,
+  Doctor findings, CI/CD status, telemetry readiness, and Foundry/Azure
+  navigation into one workspace view.
 - CI/CD workflows for GitHub Actions or Azure DevOps Pipelines
-  (`agentops workflow generate`) including a daily watchdog cron.
+  (`agentops workflow generate`) including a daily Doctor cron.
 
 The former bundle-based, multi-file workspace has been replaced by this flat `agentops.yaml` workflow for the common case.
 
@@ -40,10 +40,11 @@ The former bundle-based, multi-file workspace has been replaced by this flat `ag
 
 ## 1. Install
 
-The AgentOps stack pulls a large dependency tree (Azure SDKs + the
-OpenTelemetry instrumentation libraries used by the dashboard's live
-production telemetry). Using **`uv`** instead of `pip` cuts the cold
-install from ~2 minutes to ~15 seconds - same flags, drop-in replacement.
+The AgentOps stack pulls a large dependency tree (Azure SDKs,
+FastAPI/uvicorn for Cockpit, and OpenTelemetry instrumentation for
+Azure Monitor integration). Using **`uv`** instead of `pip` cuts the
+cold install from ~2 minutes to ~15 seconds - same flags, drop-in
+replacement.
 
 ```powershell
 python -m venv .venv
@@ -61,21 +62,36 @@ python -m pip install --upgrade "agentops-toolkit[foundry,agent]"
 ```
 
 The `[foundry]` extra brings the Azure SDKs the eval path needs;
-`[agent]` adds the FastAPI/uvicorn runtime used by `agentops dashboard`
+`[agent]` adds the FastAPI/uvicorn runtime used by `agentops cockpit`
 later in the tutorial. Installing both upfront avoids a second install
 later.
 
 ## 2. Bootstrap the project
 
 ```powershell
-agentops init
+agentops init --no-prompt
 ```
 
-This creates two files:
+`agentops init` is the single onboarding command. It scaffolds the
+workspace and (when run interactively) walks you through an azd-style
+wizard that asks for the Foundry project endpoint, agent reference,
+dataset path, and Application Insights connection string. Each answer is
+persisted to disk immediately:
 
-- `agentops.yaml` - your evaluation config (3 lines + comments).
-- `.agentops/data/smoke.jsonl` - a 3-row seed dataset with short,
+- `agentops.yaml` — your evaluation config (3 lines + comments).
+- `.agentops/data/smoke.jsonl` — a 3-row seed dataset with short,
   deterministic factual answers.
+- `.azure/dev/.env` — azd-compatible environment file containing
+  `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`, `APPLICATIONINSIGHTS_CONNECTION_STRING`,
+  and friends. Shared transparently with `azd` if you adopt it later.
+- `.azure/config.json` + `.azure/.gitignore` — env folder metadata.
+- Coding-agent skills under `.github/skills/` (or `.claude/commands/`
+  if Claude Code is detected).
+
+We pass `--no-prompt` here because you don't have a Foundry agent yet —
+we will run `agentops init` again after step 3 to fill in the answers
+interactively. Use `agentops init show` at any time to inspect the
+current configuration.
 
 ## 3. Create the smoke-test Foundry agent
 
@@ -104,10 +120,10 @@ instructions.
 
 ## 4. Connect Application Insights for tracing
 
-AgentOps reads live production telemetry (invocations, error rate, P95
-latency, tokens) from the Application Insights resource your Foundry
-project is wired to. Wire it once and the dashboard, watchdog, and
-report tooling all pick it up automatically.
+AgentOps can resolve telemetry readiness and Azure Monitor links from
+the Application Insights resource your Foundry project is wired to. Wire
+it once and Cockpit, Doctor, and report tooling all share the same
+project context.
 
 In the Foundry portal:
 
@@ -123,18 +139,42 @@ You can also wire it at project scope from the project name dropdown
 connection** → **Application Insights**. Both paths write the same
 project-level setting, so you only need to do it once.
 
-After this step the `agentops dashboard` Telemetry card flips to
-**App Insights** without any environment variable on your side.
+After this step `agentops cockpit` can show telemetry readiness and link
+you to the matching Foundry traces and Azure Monitor resources without
+extra environment variables.
 
 ## 5. Configure AgentOps
 
-Open `agentops.yaml` and set `agent:` to your Foundry prompt agent using
-the `name:version` format. Use the agent name plus the published version
-number shown in Foundry, without the `v` prefix. For example, an agent
-named `my-agent` with published version `v2` is referenced as
-`my-agent:2`.
+Now that you have the agent published and Application Insights connected,
+run the init wizard again — this time interactively — so AgentOps writes
+every value for you:
 
-The full minimal config is just:
+```powershell
+agentops init
+```
+
+Answer the prompts:
+
+- **Foundry project endpoint** — paste your project URL
+  (`https://<resource>.services.ai.azure.com/api/projects/<project>`).
+- **Agent reference** — `quickstart-agent:2` (the `name:version` you
+  copied from Foundry).
+- **Dataset path** — accept the default `.agentops/data/smoke.jsonl`.
+- **App Insights connection string** — paste from the Application Insights
+  resource's *Overview* blade.
+
+The wizard writes `agent` and `dataset` to `agentops.yaml`, and the
+Azure values to `.azure/dev/.env`. You can also set the values via flags
+for scripting:
+
+```powershell
+agentops init --no-prompt `
+  --project-endpoint "https://<resource>.services.ai.azure.com/api/projects/<project>" `
+  --agent "quickstart-agent:2" `
+  --dataset ".agentops/data/smoke.jsonl"
+```
+
+Open `agentops.yaml` to confirm — the minimal Foundry-cloud config is:
 
 ```yaml
 version: 1                       # schema version of agentops.yaml itself
@@ -142,6 +182,9 @@ agent: "quickstart-agent:2"        # ':2' is the Foundry agent version
 dataset: .agentops/data/smoke.jsonl
 execution: cloud                 # Foundry runs the agent + evaluators server-side
 ```
+
+Add `execution: cloud` manually for now — it tells AgentOps to submit the
+run to the New Foundry Evaluations panel via the OpenAI Evals API.
 
 Field reference:
 
@@ -167,10 +210,22 @@ published version - they are independent.
 
 ## 6. Run the baseline evaluation
 
-Set credentials and run. For Foundry targets, provide the project endpoint either in `agentops.yaml` as `project_endpoint:` or in `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`; if both are set, `agentops.yaml` wins for target invocation and publishing.
+The init wizard already wrote `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT` (and the
+matching `AZURE_OPENAI_*` values it can derive) to `.azure/dev/.env`.
+AgentOps auto-loads that file on every CLI run — you do not have to
+re-export the variables.
+
+You still need to sign in once so the SDKs have a credential:
 
 ```powershell
 az login
+agentops eval run
+```
+
+If you prefer to set values in the current shell instead of `.env`, the
+classic environment-variable path still works:
+
+```powershell
 $env:AZURE_AI_FOUNDRY_PROJECT_ENDPOINT = "https://<resource>.services.ai.azure.com/api/projects/<project>"
 $env:AZURE_OPENAI_ENDPOINT = "https://<openai-resource>.openai.azure.com"
 $env:AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
@@ -310,20 +365,20 @@ The doctor is the bridge between "one eval ran" and "the project's
 quality is healthy". Wire `agentops doctor` into the CI workflow
 generated below to get the same view automatically on every PR.
 
-> **Tip - local dashboard.** Every analyze run also appends a record to
-> `.agentops/agent/history.jsonl`. Run `agentops dashboard` (in a separate
-> terminal) to open a dashboard at http://127.0.0.1:8090 that shows the
-> counts and sparklines without opening every report.md by hand. The
-> dashboard is read-only and requires no Azure resource.
+> **Tip - local Cockpit.** Every Doctor run appends a record to
+> `.agentops/agent/history.jsonl`. Run `agentops cockpit` in a separate
+> terminal to open http://127.0.0.1:8090 with eval history, Doctor
+> findings, CI/CD status, telemetry readiness, and Foundry/Azure links in
+> one read-only workspace view.
 
 ### Auditing the agent in App Insights
 
 Whenever `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT` is set (it already is, for
 cloud execution), AgentOps **auto-discovers** the Application Insights
 resource attached to the Foundry project and emits OpenTelemetry traces
-there - no extra environment variable required. The `agentops dashboard`
-dashboard's *Telemetry* card surfaces "App Insights (auto-discovered)"
-plus a one-click link to the Logs blade.
+there - no extra environment variable required. Cockpit uses the same
+project context to surface telemetry readiness and route you to the
+matching Foundry and Azure Monitor views.
 
 Once you've run an `agentops eval run` or `agentops doctor`, you
 can inspect the spans directly in the Foundry project's App Insights:
@@ -384,16 +439,20 @@ the updated history. Trend data persists across runners.
 **(b) Local Task Scheduler / cron (single developer machine):** drop
 into Windows Task Scheduler or a Linux `crontab -e` and add
 `agentops doctor --workspace <path>` on the cadence you want
-(hourly, daily). Combine with `agentops dashboard` left running and the
-dashboard refreshes itself.
+(hourly, daily). Combine with `agentops cockpit` left running and the
+cockpit refreshes itself.
 
 ### Security posture (WAF AI Security pillar)
 
 The watchdog's posture check can audit your Foundry project resources
 against the Well-Architected Framework's AI Security pillar - managed
 identity instead of API keys, customer-managed encryption, private
-networking, content safety enabled, etc. To enable it, edit
-`.agentops/agent.yaml` and turn on the `azure_resources` source:
+networking, content safety enabled, etc. It is enabled by default and
+tries to discover your deployed resource automatically from AZD
+`.azure/<env>/.env` metadata, then from the Foundry project endpoint.
+
+If discovery is ambiguous, pin the Azure resource explicitly in
+`.agentops/agent.yaml`:
 
 ```yaml
 sources:
@@ -407,7 +466,7 @@ sources:
 
 Then re-run `agentops doctor`. Posture findings appear under the
 `security` category with WAF rule ids you can grep for, and the
-dashboard's *Security* card lights up if anything regressed since the
+cockpit's *Security* card lights up if anything regressed since the
 last analysis.
 
 ## 9. Generate the CI/CD workflows
@@ -415,7 +474,8 @@ last analysis.
 The eval loop is most useful when it runs automatically on every pull
 request and deploy. `agentops workflow generate` writes a complete
 GitFlow scaffold - a PR gate plus three deploy stages
-(dev / qa / production) - that you can commit to your repo verbatim.
+(dev / qa / production) plus a daily watchdog - that you can commit to
+your repo once Azure auth and deployment wiring are ready.
 
 You can target **GitHub Actions** (default) or **Azure DevOps
 Pipelines**. The conceptual workflows are identical across platforms;
@@ -459,6 +519,10 @@ Each workflow installs AgentOps, runs `agentops eval run`, uploads the
 results as a pipeline artifact, and (for the PR gate) posts the
 rendered `report.md` as an idempotent PR comment.
 
+Deployment is azd-first. When `azure.yaml` exists, the default
+`--deploy-mode auto` writes deploy stages that call `azd provision` /
+`azd deploy`; otherwise it writes stack-agnostic placeholders.
+
 For the quickstart you don't have to commit these files yet - opening
 them locally shows what AgentOps will run in CI:
 
@@ -472,7 +536,8 @@ Useful flags:
 | Flag | Default | Effect |
 |---|---|---|
 | `--platform` | `github` | `github` or `azure-devops`. |
-| `--kinds` | all four | Comma-separated subset, e.g. `--kinds pr,dev`. Use `--kinds pr` for the safest first commit. |
+| `--kinds` | all five | Comma-separated subset, e.g. `--kinds pr,dev`. Use `--kinds pr` for the safest first commit. |
+| `--deploy-mode` | `auto` | `auto`, `azd`, or `placeholder`. `auto` uses azd when `azure.yaml` exists. |
 | `--force` | off | Overwrite existing workflow files. |
 | `--dir` | `.` | Repo root directory. |
 

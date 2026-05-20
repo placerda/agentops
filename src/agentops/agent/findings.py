@@ -16,7 +16,7 @@ class Category(str, Enum):
 
     Categories mirror the **Microsoft Well-Architected Framework for AI**
     pillars and are the single source of truth shared by doctor findings,
-    ``waf-checklist.csv`` (``pillar`` column), the dashboard rows, and
+    ``waf-checklist.csv`` (``pillar`` column), the cockpit rows, and
     config skip-lists.
 
     * ``quality``                - eval-driven signals (regression, content-safety)

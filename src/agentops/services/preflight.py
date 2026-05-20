@@ -1,8 +1,8 @@
-"""Pre-flight checks shared by `agentops doctor`, `agentops dashboard`,
+"""Pre-flight checks shared by `agentops doctor`, `agentops cockpit`,
 and `agentops agent serve`.
 
 Goal: surface every reason the agent might silently misbehave *before*
-the user waits ~20 seconds for the first dashboard render or the first
+the user waits ~20 seconds for the first cockpit render or the first
 doctor run, and tell them exactly what to fix.
 
 The checks are intentionally fast and best-effort:
@@ -149,7 +149,7 @@ def _check_azure_cli() -> PreflightCheck:
             msg = f"Azure token acquisition failed: {snippet}"
             remediation = (
                 "Check your network, your `az login` state, and the "
-                "dashboard server logs at DEBUG for the full credential "
+                "cockpit server logs at DEBUG for the full credential "
                 "chain."
             )
         return PreflightCheck(
@@ -273,7 +273,7 @@ def _check_application_insights_env() -> PreflightCheck:
 # ---------------------------------------------------------------------------
 
 
-_Scope = Literal["doctor", "dashboard", "agent_serve"]
+_Scope = Literal["doctor", "cockpit", "agent_serve"]
 
 
 def run_preflight(

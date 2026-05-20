@@ -78,7 +78,7 @@ AgentOps handles both. Named agents use the Foundry Responses API; legacy agents
 
 ### 4) Connect Application Insights (recommended)
 
-Wire an App Insights resource to the project so the agent's traces flow into Azure Monitor and the AgentOps dashboard's live telemetry section lights up.
+Wire an App Insights resource to the project so Foundry traces, Azure Monitor telemetry, and AgentOps Cockpit readiness links all resolve from the same project context.
 
 1. Open the agent, click the **Traces** tab.
 2. On the *Create or connect an App Insights resource* banner, click **Connect**.

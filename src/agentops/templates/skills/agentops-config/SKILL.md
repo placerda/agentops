@@ -12,7 +12,11 @@ handful of fields - most projects need just `version`, `agent`, and
 ## Step 0 - Prerequisites
 
 1. `pip install "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@develop"` if `agentops` is missing.
-2. `agentops init` if `agentops.yaml` does not exist.
+2. If `agentops.yaml` does not exist, run `agentops init` first. The init
+   wizard already collects the agent reference and dataset path, so
+   `agentops-config` is most useful when the user wants to **tweak** an
+   existing config (add thresholds, switch to a different agent target,
+   add HTTP auth headers, etc.) rather than create one from scratch.
 
 ## Step 1 - Detect the agent target
 

@@ -4,8 +4,8 @@ This is the long-form, do-it-yourself tour of AgentOps. By the end you
 will have a real Foundry hosted agent with **three function tools**
 under evaluation, a baseline-vs-degraded comparison that demonstrates
 tool-call regression detection, four GitFlow CI/CD workflows wired to
-your own GitHub repo, and a watchdog report summarising your run
-history.
+your own GitHub repo, a Doctor readiness report, and the local
+AgentOps Cockpit view over the workspace.
 
 It takes around 60–90 minutes the first time. Every step is concrete:
 you copy a command, you see an artefact, you keep moving.
@@ -32,8 +32,8 @@ you copy a command, you see an artefact, you keep moving.
   exactly the kind of regression CI is meant to catch.
 - Four GitFlow workflows (`pr`, `dev`, `qa`, `prod`) wired to your
   own GitHub repository, gated on threshold pass/fail.
-- A watchdog report combining your run history with optional
-  Application Insights telemetry.
+- A Doctor readiness report and Cockpit view combining local run
+  history with optional Application Insights and Foundry context.
 
 ## Prerequisites
 
@@ -173,8 +173,8 @@ into `agentops.yaml` next. The script:
 ### Connect Application Insights for tracing
 
 Wire an App Insights resource to the project once so the agent's traces
-flow into Azure Monitor and AgentOps dashboard's live telemetry section
-lights up. In Foundry: open the agent → **Traces** tab → **Connect** →
+flow into Azure Monitor and AgentOps Cockpit can resolve telemetry
+readiness plus Foundry/Azure navigation links. In Foundry: open the agent → **Traces** tab → **Connect** →
 pick or create an Application Insights resource. Or at project scope:
 project name dropdown → **Project details** → **Connected resources** →
 **Add connection** → **Application Insights**. Docs:
@@ -188,20 +188,44 @@ In an empty folder (or the GitHub repo you want to use):
 agentops init
 ```
 
+`agentops init` walks you through an azd-style wizard that captures the
+Foundry project endpoint, agent reference (e.g. `support-bot:1`), dataset
+path, and Application Insights connection string. Each answer is
+persisted as you go to `.azure/dev/.env` (Azure values) or
+`agentops.yaml` (agent + dataset reference).
+
+For a non-interactive setup, pass `--no-prompt` plus explicit flags:
+
+```powershell
+agentops init --no-prompt `
+  --project-endpoint "https://<resource>.services.ai.azure.com/api/projects/<p>" `
+  --agent "support-bot:1" `
+  --dataset ".agentops/data/tickets.jsonl"
+```
+
 You get:
 
 ```
-agentops.yaml
-.agentops/
+agentops.yaml                # flat 1.0 evaluation config
+.agentops/                   # local-only workspace
 ├── data/
 │   └── smoke.jsonl
 └── results/
+.azure/                      # azd-compatible env folder
+├── config.json
+├── .gitignore
+└── dev/
+    └── .env                 # AZURE_AI_FOUNDRY_PROJECT_ENDPOINT, …
 .github/
 └── skills/
     └── agentops-*/SKILL.md
 ```
 
-Open `agentops.yaml` at the project root and configure it for the
+Run `agentops init show` later if you want to see the resolved values
+without re-running the wizard.
+
+Open `agentops.yaml` at the project root and add the per-scenario fields
+the wizard does not own (thresholds, evaluator overrides, …) for the
 support agent:
 
 ```yaml
@@ -752,9 +776,10 @@ az role assignment create `
 ### 9.3 Configure the watchdog
 
 Now write `.agentops/agent.yaml`. This is the file that tells the
-watchdog which signal sources to use. In addition to eval history,
-Application Insights, and Foundry metadata, this tutorial enables the
-read-only WAF-AI security posture audit for the Azure AI account:
+watchdog which signal sources to use. Doctor can infer the Azure AI
+account from AZD or the Foundry endpoint, but this tutorial pins the
+resource explicitly so the read-only WAF-AI security posture audit is
+fully deterministic:
 
 ```powershell
 $env:AZURE_SUBSCRIPTION_ID = az account show --query id -o tsv

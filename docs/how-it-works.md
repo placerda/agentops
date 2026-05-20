@@ -62,10 +62,12 @@ src/
     │
     └── templates/             # Starter files for `agentops init`
         ├── agentops.yaml      # Minimal flat config (the single config file)
-        ├── callable_adapter.py
-        ├── data/              # Sample dataset rows (.jsonl)
+        ├── smoke.jsonl        # Sample dataset
+        ├── agent.yaml         # Doctor config seed
         ├── skills/            # Coding agent skill templates
-        └── workflows/         # CI/CD workflow templates
+        ├── workflows/         # GitHub Actions workflow templates
+        ├── pipelines/         # Azure DevOps pipeline templates
+        └── agent-server/      # Doctor-as-Copilot-Extension deploy scaffold
 ```
 
 ### Where to Add New Code
@@ -105,24 +107,27 @@ When you run `agentops eval run`, the following happens step by step:
 
 ## CLI Commands
 
-| Command | Purpose | Status |
-|---|---|---|
-| `agentops init [--path DIR]` | Scaffold `.agentops/` workspace with starter config, bundles, datasets, and data. Also installs coding agent skills. | Available |
-| `agentops eval run` | Execute an evaluation (main command) | Available |
-| `agentops eval run --baseline <results.json>` | Run an eval and add a comparison against a previous result | Available |
-| `agentops skills install` | Install AgentOps coding agent skills (Copilot, Claude) into the target project | Available |
-| `agentops run list\|show` | List or inspect past runs | Planned (stub) |
-| `agentops run view <id> [--entry N]` | Deep-inspect a run | Planned (stub) |
-| `agentops report generate [--in <path>] [--out <path>]` | Regenerate `report.md` from `results.json` | Available |
-| `agentops report show\|export` | View or export reports | Planned (stub) |
-| `agentops bundle list\|show` | Browse bundle definitions | Planned (stub) |
-| `agentops dataset validate\|describe\|import` | Validate, describe, and import datasets | Planned (stub) |
-| `agentops config validate\|show` | Validate and inspect configuration | Planned (stub) |
-| `agentops workflow generate` | Generate CI/CD workflow file | Available |
-| `agentops trace init` | Initialize tracing setup | Planned (stub) |
-| `agentops monitor setup\|show\|configure` | Monitoring setup and operations | Planned (stub) |
-| `agentops model list` | List model deployments from Foundry project | Planned (stub) |
-| `agentops agent list` | List agent deployments from Foundry project | Planned (stub) |
+| Command | Purpose |
+|---|---|
+| `agentops --version` | Print the installed version |
+| `agentops explain [COMMAND...]` | Long-form, paged manual for any command (top-level dispatcher) |
+| `agentops init` | Idempotent scaffold + azd-style wizard + skill install (the only onboarding command) |
+| `agentops init show` | Inspect resolved config (`agentops.yaml` + `.azure/<env>/.env`) |
+| `agentops init explain` | Long-form `init` manual |
+| `agentops eval run` | Run an evaluation; the main command |
+| `agentops eval run --baseline <results.json>` | Run an eval and add a baseline comparison section to the report |
+| `agentops report generate` | Regenerate `report.md` from a `results.json` |
+| `agentops doctor` | Run the AgentOps Doctor (readiness, regression, OpEx, safety, history) |
+| `agentops doctor explain` | Long-form Doctor manual |
+| `agentops cockpit` | Local read-only Cockpit UI (FastAPI) that links out to Foundry |
+| `agentops workflow generate` | Generate CI/CD workflows for GitHub Actions or Azure DevOps |
+| `agentops skills install` | (Re)install coding-agent skills (Copilot or Claude) |
+| `agentops mcp serve` | Run AgentOps as an MCP server for code agents |
+| `agentops agent serve` | Run the Doctor as a Copilot Extension / FastAPI server |
+
+Every command supports `--help` for a terse description; long-form,
+paged documentation is accessible through `agentops explain` (or the
+local `… explain` subcommand where one exists).
 
 ## Exit Code Contract
 
@@ -134,10 +139,12 @@ Exit codes are part of the public API. **Do not change their meaning.**
 | `2` | Execution succeeded **but** one or more thresholds failed |
 | `1` | Runtime or configuration error |
 
-## User Workspace Structure (`agentops.yaml` + `.agentops/`)
+## User Workspace Structure (`agentops.yaml` + `.agentops/` + `.azure/`)
 
 The flat 1.0 schema places **one config file** at the project root and a
 small directory for datasets, run history, and (optionally) skills.
+`agentops init` also bootstraps an azd-compatible `.azure/<env>/.env`
+file so the same workspace can be driven by AgentOps and `azd`.
 
 ```
 <project root>/
@@ -145,12 +152,19 @@ small directory for datasets, run history, and (optionally) skills.
 ├── .agentops/
 │   ├── data/
 │   │   └── smoke.jsonl        # Sample dataset (created by `agentops init`)
-│   └── results/
-│       ├── 2026-05-06T14-30-22Z/  # Timestamped run (immutable history)
-│       │   ├── results.json
-│       │   ├── report.md
-│       │   └── cloud_evaluation.json   # only when `publish:` was set
-│       └── latest/                # Mirror of the most recent run
+│   ├── results/
+│   │   ├── 2026-05-06T14-30-22Z/  # Timestamped run (immutable history)
+│   │   │   ├── results.json
+│   │   │   ├── report.md
+│   │   │   └── cloud_evaluation.json   # only when `publish:` was set
+│   │   └── latest/                # Mirror of the most recent run
+│   └── agent/                 # Doctor history (history.jsonl + report.md)
+├── .azure/                    # azd-compatible env folder (shared with azd)
+│   ├── config.json            # `defaultEnvironment` pointer
+│   ├── .gitignore
+│   └── dev/
+│       └── .env               # AZURE_AI_FOUNDRY_PROJECT_ENDPOINT,
+│                              #  APPLICATIONINSIGHTS_CONNECTION_STRING, …
 └── .github/skills/            # Coding agent skills (Copilot)
     ├── agentops-config/SKILL.md
     ├── agentops-eval/SKILL.md

@@ -3,8 +3,8 @@
 Compares the project's spec-driven-development artifacts
 (``.specify/spec.md`` + ``plan.md`` + ``tasks.md``, ``AGENTS.md``,
 ``.github/copilot-instructions.md``) against the AgentOps workspace
-(``run.yaml``, ``.agentops/bundles/``, ``.agentops/datasets/``,
-``CHANGELOG.md``) and flags drift between the two.
+(``run.yaml``, ``.agentops/bundles/``, ``.agentops/datasets/``)
+and flags drift between the two.
 
 All findings live under :class:`Category.OPERATIONAL_EXCELLENCE` with
 the ``opex.spec_conformance.*`` id prefix. Deterministic rules emit
@@ -18,7 +18,6 @@ The companion opt-in LLM rule
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -34,9 +33,6 @@ from agentops.agent.sources.spec_detectors import (
 )
 
 SOURCE_NAME = "spec_workspace"
-
-_MIN_MEANINGFUL_LINES = 5
-
 
 def run_spec_conformance_check(
     workspace: Path,
@@ -65,20 +61,26 @@ def run_spec_conformance_check(
                     id="opex.spec_conformance.spec_missing",
                     severity=Severity.WARNING,
                     category=Category.OPERATIONAL_EXCELLENCE,
-                    title="Spec-driven setup detected, but spec content is missing",
+                    title=(
+                        "Spec setup detected, but no usable specification was found"
+                    ),
                     summary=(
-                        "Spec scaffolding was found in the workspace "
-                        "(e.g. `.specify/` directory or a "
-                        "`copilot-instructions.md` shell) but no "
-                        "actual spec document could be loaded. The "
-                        "doctor can't verify implementation/spec "
-                        "alignment without content."
+                        "Doctor found signs that this repo uses "
+                        "spec-driven development (for example "
+                        "`.specify/`, `AGENTS.md`, or a "
+                        "`copilot-instructions.md` shell), but could "
+                        "not load a real spec body. Without that "
+                        "reference, Doctor cannot check whether "
+                        "bundles, datasets, tasks, and "
+                        "implementation still match the intended agent "
+                        "behavior."
                     ),
                     recommendation=(
-                        "Author `.specify/spec.md` (spec-kit) or "
-                        "`AGENTS.md` describing the agent's "
-                        "capabilities, evaluators, and datasets, "
-                        "then re-run `agentops doctor`."
+                        "Add a readable spec such as `.specify/spec.md` "
+                        "(spec-kit) or `AGENTS.md` that describes the "
+                        "agent's intended behavior, capabilities, "
+                        "evaluators, and datasets, then re-run "
+                        "`agentops doctor`."
                     ),
                     source=SOURCE_NAME,
                     evidence={"hint_paths": [str(p) for p in hint_only]},
@@ -87,13 +89,10 @@ def run_spec_conformance_check(
         return _filter_skipped(findings, config.skip)
 
     for doc in documents:
-        findings.extend(_check_spec_empty(doc))
         findings.extend(_check_tasks(doc, config.stale_after_days))
         findings.extend(_check_evaluator_drift(workspace, doc))
         findings.extend(_check_dataset_drift(workspace, doc))
         findings.extend(_check_agent_drift(workspace, doc))
-        findings.extend(_check_copilot_instructions_link(doc))
-        findings.extend(_check_changelog_link(workspace, doc))
 
     deduped: List[Finding] = []
     seen: set[tuple[str, str]] = set()
@@ -132,40 +131,6 @@ def _evidence_key(f: Finding) -> str:
     return "|".join(parts)
 
 
-def _check_spec_empty(doc: SpecDocument) -> List[Finding]:
-    meaningful = [
-        line for line in doc.text.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
-    if len(meaningful) >= _MIN_MEANINGFUL_LINES:
-        return []
-    return [
-        Finding(
-            id="opex.spec_conformance.spec_empty",
-            severity=Severity.INFO,
-            category=Category.OPERATIONAL_EXCELLENCE,
-            title=f"Spec document ({doc.format}) is effectively empty",
-            summary=(
-                "The spec file(s) were found but contain fewer than "
-                f"{_MIN_MEANINGFUL_LINES} non-heading lines. Spec "
-                "conformance checks need real content to compare "
-                "against."
-            ),
-            recommendation=(
-                "Flesh out the spec with capability bullets, "
-                "evaluator names, dataset references, and the "
-                "agent's target endpoint."
-            ),
-            source=SOURCE_NAME,
-            evidence={
-                "format": doc.format,
-                "files": [str(p) for p in doc.files],
-                "meaningful_lines": len(meaningful),
-            },
-        )
-    ]
-
-
 def _check_tasks(doc: SpecDocument, stale_after_days: int) -> List[Finding]:
     findings: List[Finding] = []
     if not doc.tasks:
@@ -186,15 +151,24 @@ def _check_tasks(doc: SpecDocument, stale_after_days: int) -> List[Finding]:
                 id="opex.spec_conformance.tasks_stale",
                 severity=Severity.WARNING,
                 category=Category.OPERATIONAL_EXCELLENCE,
-                title="Open tasks in spec are older than the staleness window",
+                title="Spec tasks have been left open past the freshness window",
                 summary=(
-                    f"{len(unchecked)} unchecked task(s) in the spec "
-                    f"haven't been touched for {age_days:.1f} day(s) "
-                    f"(threshold: {stale_after_days})."
+                    f"Doctor found {len(unchecked)} unchecked task(s) "
+                    "in the spec (for example `tasks.md` in a spec-kit "
+                    "workspace), and the spec has not been updated for "
+                    f"{age_days:.1f} day(s). The configured freshness "
+                    f"window is {stale_after_days} day(s). This usually "
+                    "means the implementation plan is no longer "
+                    "trustworthy: either the work is done but the tasks "
+                    "were not checked off, the tasks are no longer "
+                    "relevant, or the agent behavior changed without the "
+                    "spec being refreshed."
                 ),
                 recommendation=(
-                    "Either close the tasks, drop them from the spec, "
-                    "or update the spec to reflect the new reality."
+                    "Review the open tasks. Check off completed work, "
+                    "remove tasks that no longer apply, or update the "
+                    "spec so the task list reflects the current agent "
+                    "behavior and evaluation plan."
                 ),
                 source=SOURCE_NAME,
                 evidence={
@@ -359,77 +333,6 @@ def _check_agent_drift(workspace: Path, doc: SpecDocument) -> List[Finding]:
             },
         )
     ]
-
-
-def _check_copilot_instructions_link(doc: SpecDocument) -> List[Finding]:
-    if doc.format != "agents-md":
-        return []
-    has_copilot_file = any(
-        str(p).endswith("copilot-instructions.md") for p in doc.files
-    )
-    if not has_copilot_file:
-        return []
-    if re.search(r"agentops", doc.text, re.IGNORECASE):
-        return []
-    return [
-        Finding(
-            id="opex.spec_conformance.copilot_instructions_missing_agentops",
-            severity=Severity.INFO,
-            category=Category.OPERATIONAL_EXCELLENCE,
-            title="`copilot-instructions.md` doesn't reference AgentOps",
-            summary=(
-                "Copilot instructions are present but never mention "
-                "AgentOps or its skills. New contributors won't be "
-                "guided toward the eval workflow."
-            ),
-            recommendation=(
-                "Add a short AgentOps section to "
-                "`.github/copilot-instructions.md` describing the "
-                "eval workflow and the installed skills."
-            ),
-            source=SOURCE_NAME,
-            evidence={"files": [str(p) for p in doc.files]},
-        )
-    ]
-
-
-def _check_changelog_link(workspace: Path, doc: SpecDocument) -> List[Finding]:
-    changelog = workspace / "CHANGELOG.md"
-    if not changelog.exists():
-        return []
-    if doc.last_modified is None:
-        return []
-    try:
-        changelog_mtime = datetime.fromtimestamp(
-            changelog.stat().st_mtime, tz=timezone.utc
-        )
-    except OSError:
-        return []
-    if doc.last_modified <= changelog_mtime:
-        return []
-    return [
-        Finding(
-            id="opex.spec_conformance.changelog_unlinked_spec",
-            severity=Severity.INFO,
-            category=Category.OPERATIONAL_EXCELLENCE,
-            title="Spec was modified after the last CHANGELOG entry",
-            summary=(
-                "The spec changed but no corresponding CHANGELOG "
-                "entry followed. The release narrative is drifting "
-                "from the contract."
-            ),
-            recommendation=(
-                "Add a CHANGELOG entry describing the spec change, "
-                "or roll the spec change back if it was unintended."
-            ),
-            source=SOURCE_NAME,
-            evidence={
-                "spec_modified": doc.last_modified.isoformat(),
-                "changelog_modified": changelog_mtime.isoformat(),
-            },
-        )
-    ]
-
 
 def _collect_evaluator_names(workspace: Path) -> set[str]:
     """Read every bundle YAML and return the set of evaluator class names."""

@@ -11,6 +11,12 @@ End-to-end workflow: install → init → configure → run → read report.
 
 1. Install if missing: `pip install "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@develop"`.
 2. If `agentops.yaml` does not exist at the project root, run `agentops init`.
+   The init wizard prompts (azd-style) for the Foundry project endpoint,
+   agent reference, and dataset path, persists each answer to
+   `.azure/<env>/.env` + `agentops.yaml` as it goes, and installs coding
+   skills. Pass `--no-prompt` plus the explicit flags
+   (`--project-endpoint`, `--agent`, `--dataset`, …) for non-interactive
+   runs. Run `agentops init show` later to inspect the resolved config.
 
 ## Step 1 - Identify the agent target
 

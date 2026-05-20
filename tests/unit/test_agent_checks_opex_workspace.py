@@ -234,25 +234,25 @@ def test_results_dir_bloat_ignores_latest(workspace: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# no_changelog
+# pruned cosmetic changelog rule
 # ---------------------------------------------------------------------------
 
 
-def test_no_changelog_emitted_when_git_repo_without_changelog(
+def test_no_changelog_is_not_a_default_doctor_finding(
     workspace: Path,
 ) -> None:
     (workspace / ".git").mkdir()
     findings = run_opex_workspace_check(workspace)
-    assert "opex.no_changelog" in _ids(findings)
+    assert "opex.no_changelog" not in _ids(findings)
 
 
-def test_no_changelog_silent_when_changelog_present(workspace: Path) -> None:
+def test_changelog_presence_does_not_affect_default_findings(workspace: Path) -> None:
     (workspace / ".git").mkdir()
     (workspace / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
     assert "opex.no_changelog" not in _ids(run_opex_workspace_check(workspace))
 
 
-def test_no_changelog_silent_when_not_a_git_repo(workspace: Path) -> None:
+def test_missing_git_repo_does_not_emit_changelog_finding(workspace: Path) -> None:
     # No .git/ → scratch workspace; the rule stays quiet.
     assert "opex.no_changelog" not in _ids(run_opex_workspace_check(workspace))
 

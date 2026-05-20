@@ -76,11 +76,9 @@ def test_find_waf_item_for_new_genaiops_rules() -> None:
     for finding_id in (
         "opex.unversioned_bundle",
         "opex.results_dir_bloat",
-        "opex.no_changelog",
         "opex.workflow_concurrency_lock",
         "opex.workflow_action_sha_pinning",
         "opex.no_foundry_control_configured",
-        "opex.no_foundry_agents",
     ):
         item = find_waf_item(finding_id)
         assert item is not None, f"{finding_id} not found in CSV"

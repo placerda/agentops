@@ -1,9 +1,8 @@
 """Foundry control-plane configuration audit (Operational Excellence category).
 
 Mirrors the ``errors.no_runtime_telemetry`` pattern for the Foundry
-control plane. The Doctor warns when the project says it uses Foundry
-but the control-plane source is unconfigured or unreachable, and when
-the source is connected but the project has no agents.
+control plane. The Doctor warns when Foundry was expected but the
+control-plane source is unconfigured or unreachable.
 
 If the user explicitly opted out (``foundry_control.enabled: false``)
 we stay silent - that is the documented way to say "we are not on
@@ -37,9 +36,6 @@ def run_foundry_config_check(
     if status != "ok":
         findings.append(_no_foundry_control_finding(diag))
         return findings
-
-    if not foundry.agents:
-        findings.append(_no_foundry_agents_finding(diag))
 
     return findings
 
@@ -75,33 +71,5 @@ def _no_foundry_control_finding(diag: dict) -> Finding:
             "monitor_status": status,
             "reason": reason,
             "mode": "not_configured",
-        },
-    )
-
-
-def _no_foundry_agents_finding(diag: dict) -> Finding:
-    return Finding(
-        id="opex.no_foundry_agents",
-        severity=Severity.WARNING,
-        category=Category.OPERATIONAL_EXCELLENCE,
-        title="Foundry project has no agents",
-        summary=(
-            "The `foundry_control` source is connected to the project "
-            f"({diag.get('endpoint') or 'endpoint unknown'}) but it "
-            "lists 0 agents. Doctor cannot grade Foundry runs, "
-            "continuous-evaluation rules, or version drift on a "
-            "project with no agents to observe."
-        ),
-        recommendation=(
-            "Deploy at least one agent to the Foundry project "
-            "(Foundry portal -> Build -> Agents -> Create). If you "
-            "deploy elsewhere (HTTP, Container Apps), set "
-            "`sources.foundry_control.enabled: false` to silence this "
-            "check."
-        ),
-        source=SOURCE_NAME,
-        evidence={
-            "mode": "no_agents",
-            "endpoint": diag.get("endpoint"),
         },
     )

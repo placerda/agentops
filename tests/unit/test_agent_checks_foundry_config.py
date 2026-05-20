@@ -32,17 +32,12 @@ def test_emits_when_source_skipped() -> None:
     assert f.evidence["mode"] == "not_configured"
 
 
-def test_emits_when_source_ok_but_no_agents() -> None:
+def test_silent_when_source_ok_but_no_agents() -> None:
     foundry = FoundryControlPayload(
         agents=[],
         diagnostics={"status": "ok", "endpoint": "https://x.api.azureml.ms"},
     )
-    findings = run_foundry_config_check(foundry)
-    assert len(findings) == 1
-    f = findings[0]
-    assert f.id == "opex.no_foundry_agents"
-    assert f.evidence["mode"] == "no_agents"
-    assert f.evidence["endpoint"] == "https://x.api.azureml.ms"
+    assert run_foundry_config_check(foundry) == []
 
 
 def test_silent_when_source_ok_with_agents() -> None:

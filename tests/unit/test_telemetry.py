@@ -76,6 +76,9 @@ class TestInitTracingWithoutEndpoint:
         # Ensure the env var is not set
         env = os.environ.copy()
         env.pop("AGENTOPS_OTLP_ENDPOINT", None)
+        env.pop("APPLICATIONINSIGHTS_CONNECTION_STRING", None)
+        env.pop("AGENTOPS_APPLICATIONINSIGHTS_CONNECTION_STRING", None)
+        env.pop("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", None)
         with patch.dict(os.environ, env, clear=True):
             # Reset module state
             import agentops.utils.telemetry as tel

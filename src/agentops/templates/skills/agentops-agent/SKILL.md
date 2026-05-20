@@ -70,21 +70,22 @@ verbatim - for example, if the finding says "compare the latest run
 against the baseline runs in `.agentops/results/`", actually open
 those folders.
 
-## Local dashboard (`agentops dashboard`)
+## Local cockpit (`agentops cockpit`)
 
-For a continuous view (not just a Markdown report) the user can open a
-local dashboard:
+For a workspace-level operations view the user can open a local
+Cockpit:
 
 ```bash
 pip install "agentops-toolkit[agent] @ git+https://github.com/Azure/agentops.git@develop"
-agentops dashboard
+agentops cockpit
 # → http://127.0.0.1:8090
 ```
 
-The dashboard reads `.agentops/agent/history.jsonl` - a JSON-lines file
-the analyzer appends to on every run - and renders the latest counts,
-per-category cards, and sparklines of the last 12 analyses. No Azure
-resource needed; it's read-only and bound to localhost.
+Cockpit reads local AgentOps artifacts first: `.agentops/results/`,
+generated reports, `.agentops/agent/history.jsonl`, and workflow files.
+When a Foundry project is configured, it also resolves telemetry
+readiness and links to the matching Foundry and Azure Monitor views.
+It is read-only and bound to localhost.
 
 When telemetry is enabled the analyzer **also** emits OpenTelemetry
 spans (`ANALYZE watchdog`) with per-severity / per-category counters,
@@ -124,7 +125,7 @@ Extension on Azure Container Apps.
 - Do **not** invent CLI flags. The contract is exactly:
   - `agentops doctor [--workspace] [--config] [--out] [--lookback-days] [--severity-fail]`
   - `agentops agent serve [--host] [--port] [--config] [--no-verify] [--workers]`
-  - `agentops dashboard [--host] [--port] [--workspace]`
+  - `agentops cockpit [--host] [--port] [--workspace]`
 - If a source is `skipped` or `error`, surface that as the *first*
   thing in the user-facing summary so they know the analyzer ran with
   partial data.

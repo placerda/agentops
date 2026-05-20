@@ -1,4 +1,4 @@
-"""Tests for the dashboard CLI port-conflict friendly fallback."""
+"""Tests for the cockpit CLI port-conflict friendly fallback."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Generator
 
 import pytest
 
-from agentops.cli.app import _existing_agentops_dashboard, _port_in_use
+from agentops.cli.app import _existing_agentops_cockpit, _port_in_use
 
 
 @pytest.fixture
@@ -78,21 +78,21 @@ def _start_server(handler_cls, free_port: int):
     return server, thread
 
 
-def test_existing_dashboard_detected_when_healthz_matches(free_port: int) -> None:
+def test_existing_cockpit_detected_when_healthz_matches(free_port: int) -> None:
     server, _t = _start_server(_OkHealthzHandler, free_port)
     try:
-        assert _existing_agentops_dashboard("127.0.0.1", free_port) is True
+        assert _existing_agentops_cockpit("127.0.0.1", free_port) is True
     finally:
         server.shutdown()
 
 
-def test_existing_dashboard_false_when_different_service(free_port: int) -> None:
+def test_existing_cockpit_false_when_different_service(free_port: int) -> None:
     server, _t = _start_server(_SomethingElseHandler, free_port)
     try:
-        assert _existing_agentops_dashboard("127.0.0.1", free_port) is False
+        assert _existing_agentops_cockpit("127.0.0.1", free_port) is False
     finally:
         server.shutdown()
 
 
-def test_existing_dashboard_false_when_nothing_listening(free_port: int) -> None:
-    assert _existing_agentops_dashboard("127.0.0.1", free_port) is False
+def test_existing_cockpit_false_when_nothing_listening(free_port: int) -> None:
+    assert _existing_agentops_cockpit("127.0.0.1", free_port) is False

@@ -2,7 +2,7 @@
 #
 # Runs `agentops doctor` on a daily cron and on manual dispatch.
 # Uploads the report.md + history.jsonl as an artifact and posts a
-# Step Summary so the dashboard data persists across runners.
+# Step Summary so the cockpit data persists across runners.
 #
 # When AZURE_AI_FOUNDRY_PROJECT_ENDPOINT is set as a repository variable,
 # the analyzer auto-discovers the Foundry project's Application Insights

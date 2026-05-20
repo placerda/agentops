@@ -47,18 +47,19 @@ def test_build_cards_from_summary_and_buckets():
     cards = _build_cards(summary, invocations, latency, tokens)
     by_key = {c["key"]: c for c in cards}
 
-    assert by_key["prod_invocations"]["value"] == 200
+    # The Production telemetry section is intentionally a *teaser* into
+    # Foundry Monitor: only the "is something wrong?" signals (error
+    # rate + P95 latency) live in the cockpit. Invocations, tokens,
+    # and other volumetric metrics are owned by Foundry Monitor and
+    # must not be replicated here.
+    assert "prod_invocations" not in by_key
+    assert "prod_tokens" not in by_key
     # 4/200 = 2% → "watch" tone
     assert by_key["prod_errors"]["value"] == "2%"
     assert by_key["prod_errors"]["badge"]["tone"] == "warn"
     # P95 4.5s → "snappy"
     assert by_key["prod_p95"]["value"] == "4.50"
     assert by_key["prod_p95"]["badge"]["tone"] == "ok"
-    # Tokens: 15.9k formatted, value_kind text
-    assert by_key["prod_tokens"]["value"] == "15.9k"
-    assert by_key["prod_tokens"]["value_kind"] == "text"
-    # Sparkline series carry the hourly buckets.
-    assert by_key["prod_invocations"]["series"] == [50.0, 150.0]
     # Latency series is scaled to seconds.
     assert by_key["prod_p95"]["series"] == [2.0, 6.0]
 
@@ -68,45 +69,19 @@ def test_build_cards_empty_when_no_summary_rows():
     assert cards == []
 
 
-def test_build_cards_tokens_per_model_breakdown():
-    """When multiple models contribute, the Tokens card aggregates the
-    total and surfaces a per-model bullet list in the help tooltip."""
+def test_build_cards_only_error_rate_and_p95():
+    """The teaser layout produces exactly two cards: error rate and P95
+    latency. Invocations and tokens are deliberately delegated to
+    Foundry Monitor so AgentOps doesn't compete with the system of
+    record."""
     summary = {"rows": [{"invocations": 10, "errors": 0, "avg_ms": 100, "p95_ms": 500}]}
     tokens = {"rows": [
         {"model_name": "gpt-4o-mini", "input_tokens": 12000, "output_tokens": 4000},
         {"model_name": "text-embedding-3-small", "input_tokens": 8000, "output_tokens": 0},
     ]}
     cards = _build_cards(summary, {}, {}, tokens)
-    tok = next(c for c in cards if c["key"] == "prod_tokens")
-
-    # Grand total = 12000 + 4000 + 8000 + 0 = 24000 → "24.0k"
-    assert tok["value"] == "24.0k"
-    # Unit mentions both the in/out split and how many models contributed.
-    assert "across 2 models" in tok["unit"]
-    # Per-model breakdown lives in the help text as bullets.
-    assert "gpt-4o-mini" in tok["help"]
-    assert "text-embedding-3-small" in tok["help"]
-    assert "Per-model breakdown" in tok["help"]
-    # Source footer mentions aggregation across deployments.
-    assert "across 2 deployments" in tok["source"]
-
-
-def test_build_cards_tokens_single_model_includes_breakdown():
-    """A single-model deployment should still surface a per-model
-    breakdown in the tooltip — the documented behavior is that the
-    Tokens card *always* breaks the grand total down per deployment,
-    regardless of model count."""
-    summary = {"rows": [{"invocations": 5, "errors": 0, "avg_ms": 100, "p95_ms": 500}]}
-    tokens = {"rows": [
-        {"model_name": "gpt-4o-mini", "input_tokens": 1000, "output_tokens": 500},
-    ]}
-    cards = _build_cards(summary, {}, {}, tokens)
-    tok = next(c for c in cards if c["key"] == "prod_tokens")
-    # No "across N models" suffix when there is only one.
-    assert "across" not in tok["unit"]
-    # But the per-model breakdown bullet list IS present.
-    assert "Per-model breakdown" in tok["help"]
-    assert "gpt-4o-mini" in tok["help"]
+    keys = {c["key"] for c in cards}
+    assert keys == {"prod_errors", "prod_p95"}
 
 
 def test_error_rate_badge_thresholds():
@@ -245,7 +220,7 @@ def test_run_query_treats_application_insights_error_response_as_failure(monkeyp
 
 def test_humanize_token_error_handles_default_credential_wall_of_text():
     """The DefaultAzureCredential failure message is a 1-2kb wall of text
-    citing every credential in the chain. The dashboard must not dump it
+    citing every credential in the chain. The cockpit must not dump it
     raw into the error tile — surface the actionable `az login` hint
     instead."""
     from agentops.agent.production_telemetry import _humanize_token_error

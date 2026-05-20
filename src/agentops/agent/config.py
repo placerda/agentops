@@ -39,7 +39,7 @@ class AzureResourcesSourceConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
-    enabled: bool = False
+    enabled: bool = True
     subscription_id: Optional[str] = None
     subscription_id_env: str = "AZURE_SUBSCRIPTION_ID"
     resource_group: Optional[str] = None
@@ -101,13 +101,13 @@ class PostureCheckConfig(BaseModel):
     The MVP rule set targets the **Security** pillar of the
     Microsoft Well-Architected Framework for AI workloads.
 
-    The check is opt-in: ``enabled`` defaults to ``False`` because it
-    requires the ``azure_resources`` source to be configured and an
-    Azure Reader role on the target resource group.
+    The check is enabled by default. If the Azure resources source cannot
+    be discovered or read, it returns no findings and records an
+    actionable source diagnostic instead of failing the whole Doctor run.
     """
 
     model_config = ConfigDict(extra="forbid")
-    enabled: bool = False
+    enabled: bool = True
     pillar: str = "security"
     exclude_rules: List[str] = Field(default_factory=list)
 

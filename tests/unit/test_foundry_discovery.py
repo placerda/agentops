@@ -269,13 +269,13 @@ def test_successful_discovery_is_cached_in_process():
     assert fake_projects_mod.AIProjectClient.call_count == 1
 
 
-def test_telemetry_status_surfaces_discovery_reason_in_dashboard_tile(monkeypatch):
-    """The dashboard tile must include the actual failure reason so the
+def test_telemetry_status_surfaces_discovery_reason_in_cockpit_tile(monkeypatch):
+    """The cockpit tile must include the actual failure reason so the
     user does not have to dig through server logs to see why discovery
     failed."""
     monkeypatch.setenv(
         "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT",
-        "https://x.services.ai.azure.com/api/projects/dashboard-reason",
+        "https://x.services.ai.azure.com/api/projects/cockpit-reason",
     )
     monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
     monkeypatch.delenv("AGENTOPS_APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
@@ -295,7 +295,7 @@ def test_telemetry_status_surfaces_discovery_reason_in_dashboard_tile(monkeypatc
         "sys.modules",
         {"azure.ai.projects": fake_projects_mod, "azure.identity": fake_identity_mod},
     ):
-        from agentops.agent.dashboard import _telemetry_status
+        from agentops.agent.cockpit import _telemetry_status
         status = _telemetry_status()
 
     assert status["enabled"] is False
