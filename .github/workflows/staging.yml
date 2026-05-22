@@ -116,8 +116,9 @@ jobs:
           TMPDIR=$(mktemp -d)
           cd "$TMPDIR"
           agentops init
-          test -f .agentops/config.yaml
-          test -f .agentops/run.yaml
+          test -f agentops.yaml
+          test -f .agentops/data/smoke.jsonl
+          test -f .azure/config.json
           echo "✅ agentops init succeeded"
 
   # ── VSIX Pre-release ─────────────────────────────────────────────────
