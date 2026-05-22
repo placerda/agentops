@@ -33,7 +33,7 @@ agent = [
   "azure-monitor-opentelemetry>=1.6",
   "azure-identity>=1.17",
   "azure-mgmt-cognitiveservices>=13.5",
-  "azure-mgmt-monitor>=6.0",
+  "azure-mgmt-monitor>=7.0.0",
 ]
 
 [project.scripts]
