@@ -14,8 +14,6 @@ from agentops.agent.config import LLMAssistCheckConfig
 from agentops.agent.findings import Category, Severity
 from agentops.agent.llm_assist import run_llm_assist_check
 from agentops.agent.llm_assist._base import (
-    FindingBuilderArgs,
-    build_llm_finding,
     hash_text,
     normalised_risk,
     severity_for,

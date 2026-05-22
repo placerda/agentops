@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from agentops.agent.time_range import TimeRange, parse_time_range, preset_keys
+from agentops.agent.time_range import parse_time_range, preset_keys
 
 
 _NOW = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)

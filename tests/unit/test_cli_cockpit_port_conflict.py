@@ -6,7 +6,6 @@ import json
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Generator
 
 import pytest
 

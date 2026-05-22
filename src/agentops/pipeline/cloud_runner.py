@@ -414,13 +414,13 @@ def _evaluator_deployment_name() -> Optional[str]:
 
 def _build_cloud_data_mapping(preset: Any) -> Dict[str, str]:
     mapping: Dict[str, str] = {}
-    for field, placeholder in preset.input_mapping.items():
+    for input_field, placeholder in preset.input_mapping.items():
         if placeholder == "$prediction" and getattr(preset, "needs_conversation", False):
-            mapping[field] = "{{sample.output_items}}"
+            mapping[input_field] = "{{sample.output_items}}"
             continue
         mapped = _CLOUD_PLACEHOLDERS.get(placeholder)
         if mapped:
-            mapping[field] = mapped
+            mapping[input_field] = mapped
     return mapping
 
 

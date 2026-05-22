@@ -2449,10 +2449,9 @@ def _existing_agentops_cockpit(host: str, port: int) -> bool:
 def _summarize_cockpit_connection(workspace: Path) -> list[tuple[str, str]]:
     """Return label/value pairs describing where the cockpit is pointed.
 
-    Surfaces the resolved Foundry project endpoint, the agent identifier,
-    and where each value came from (agentops.yaml, `.agentops/run.yaml`,
-    or the ``AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`` env var) so the operator
-    knows which project they are analyzing before the browser opens.
+    Surfaces the resolved Foundry project endpoint and agent identifier so
+    the operator knows which project they are analyzing before the browser
+    opens.
 
     Best-effort: any read failure (missing file, malformed YAML, no env
     var) yields a "not configured" line with a single concrete next step
@@ -2460,9 +2459,7 @@ def _summarize_cockpit_connection(workspace: Path) -> list[tuple[str, str]]:
     """
 
     project_endpoint: str | None = None
-    project_source: str = ""
     agent_id: str | None = None
-    agent_source: str = ""
 
     def _read_yaml(path: Path) -> dict:
         try:
@@ -2486,12 +2483,10 @@ def _summarize_cockpit_connection(workspace: Path) -> list[tuple[str, str]]:
             value = data.get("agent")
             if isinstance(value, str) and value.strip():
                 agent_id = value.strip()
-                agent_source = path.name
         if not project_endpoint:
             value = data.get("project_endpoint")
             if isinstance(value, str) and value.strip():
                 project_endpoint = value.strip()
-                project_source = path.name
         if agent_id and project_endpoint:
             break
 
@@ -2508,12 +2503,10 @@ def _summarize_cockpit_connection(workspace: Path) -> list[tuple[str, str]]:
                     value = endpoint.get("agent_id")
                     if isinstance(value, str) and value.strip():
                         agent_id = value.strip()
-                        agent_source = path.name
                 if not project_endpoint:
                     value = endpoint.get("project_endpoint")
                     if isinstance(value, str) and value.strip():
                         project_endpoint = value.strip()
-                        project_source = path.name
             if agent_id and project_endpoint:
                 break
 
@@ -2522,7 +2515,6 @@ def _summarize_cockpit_connection(workspace: Path) -> list[tuple[str, str]]:
         env_value = os.environ.get("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
         if env_value and env_value.strip():
             project_endpoint = env_value.strip()
-            project_source = "env"
 
     rows: list[tuple[str, str]] = []
 

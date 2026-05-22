@@ -18,9 +18,6 @@ from agentops.agent.llm_assist._prompt_rules import (
     check_prompt_safety_guardrails,
     check_prompt_transparency,
 )
-from agentops.agent.llm_assist._spec_rules import (
-    run_spec_implementation_gap_rule,
-)
 from agentops.agent.sources.foundry_control import FoundryControlPayload
 
 

@@ -34,7 +34,6 @@ from agentops.core.results import (
 )
 from agentops.pipeline import comparison as comparison_module
 from agentops.pipeline import invocations, publisher, reporter, runtime, thresholds
-from agentops.pipeline.diagnostics import summarize_exception
 from agentops.utils import telemetry
 from agentops.utils.colors import style
 

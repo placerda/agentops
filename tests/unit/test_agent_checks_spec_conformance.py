@@ -6,7 +6,6 @@ import os
 import time
 from pathlib import Path
 
-import pytest
 
 from agentops.agent.checks.spec_conformance import (
     detect_documents,

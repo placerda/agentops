@@ -11,7 +11,7 @@ Three rules share the same source (Foundry agent ``instructions``):
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from agentops.agent.findings import Category, Finding
 from agentops.agent.llm_assist._base import (
