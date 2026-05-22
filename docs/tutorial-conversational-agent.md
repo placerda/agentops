@@ -1,7 +1,7 @@
 # Tutorial - conversational agent
 
 Evaluate a multi-turn assistant or chatbot. The shape of a
-*conversational* agent is identical to any other agent for AgentOps  - 
+*conversational* agent is identical to any other agent for AgentOps  -
 what makes it conversational is the **dataset**: the rows can include
 prior turns the agent should consider.
 
@@ -79,8 +79,12 @@ Fluency, Similarity, F1Score, average latency.
 ## 4. Run
 
 ```powershell
+agentops eval analyze
 agentops eval run
 ```
+
+`eval analyze` should report a simple configured eval before `eval run`
+creates the first `results.json` and `report.md`.
 
 Open the report with `code .agentops/results/latest/report.md` and press `Ctrl+Shift+V` to render the Markdown - verdict, per-row
 transcript, and aggregate scores.

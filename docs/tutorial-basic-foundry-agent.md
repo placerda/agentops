@@ -169,8 +169,13 @@ dataset shape that triggers tool-aware evaluators.
 ## Part 5: Run the evaluation
 
 ```powershell
+agentops eval analyze
 agentops eval run
 ```
+
+`eval analyze` is a read-only pre-run check. It confirms that
+`agentops.yaml`, the dataset reference, and the inferred scenario are ready
+before the first real evaluation.
 
 AgentOps will:
 1. Send each prompt to the agent via the Foundry API

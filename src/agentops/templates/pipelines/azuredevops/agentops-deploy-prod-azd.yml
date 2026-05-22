@@ -1,5 +1,7 @@
 # AgentOps - Deploy to production with azd (Azure DevOps Pipelines)
 #
+# agentops:deploy-mode=azd
+#
 # RUN_AZD_PROVISION defaults to false for production. Use Azure DevOps
 # Environment approvals before enabling infra changes.
 
@@ -54,6 +56,7 @@ stages:
                         azd env set AZURE_LOCATION "$AZURE_LOCATION"
                       fi
                       if [ "$(RUN_AZD_PROVISION)" = "true" ]; then
+__AILZ_PREFLIGHT_COMMAND__
                         azd provision --no-prompt
                       else
                         echo "Skipping azd provision for production."
@@ -77,17 +80,27 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 python -m pip install --upgrade pip
-                python -m pip install "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@develop"
+                python -m pip install "agentops-toolkit[foundry,agent] @ git+https://github.com/Azure/agentops.git@develop"
                 agentops eval run --config "$(AGENTOPS_CONFIG)"
+                agentops doctor --workspace . --out .agentops/agent/report.md \
+                  --severity-fail critical --evidence-pack
             env:
               AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: $(AZURE_AI_FOUNDRY_PROJECT_ENDPOINT)
               AZURE_OPENAI_ENDPOINT: $(AZURE_OPENAI_ENDPOINT)
               AZURE_OPENAI_DEPLOYMENT: $(AZURE_OPENAI_DEPLOYMENT)
+              APPLICATIONINSIGHTS_CONNECTION_STRING: $(APPLICATIONINSIGHTS_CONNECTION_STRING)
           - task: PublishPipelineArtifact@1
             condition: always()
             inputs:
               targetPath: .agentops/results/latest
               artifact: agentops-deploy-prod-results
+              publishLocation: pipeline
+
+          - task: PublishPipelineArtifact@1
+            condition: always()
+            inputs:
+              targetPath: .agentops/release/latest
+              artifact: agentops-deploy-prod-release-evidence
               publishLocation: pipeline
 
   - stage: deploy
@@ -107,17 +120,17 @@ stages:
                     azureSubscription: $(AZURE_SERVICE_CONNECTION)
                     scriptType: bash
                     scriptLocation: inlineScript
-                     inlineScript: |
-                       curl -fsSL https://aka.ms/install-azd.sh | bash
-                       test -f azure.yaml || {
-                         echo "##vso[task.logissue type=error;sourcepath=azure.yaml]No azure.yaml found. Ask your coding agent to generate a zero-trust azd deployment, then re-run this pipeline."
-                         exit 1
-                       }
-                       azd env new "$(AZURE_ENV_NAME)" --no-prompt --subscription "$(AZURE_SUBSCRIPTION_ID)" ${AZURE_LOCATION:+--location "$AZURE_LOCATION"} \
-                         || azd env select "$(AZURE_ENV_NAME)"
-                       azd env set AZURE_SUBSCRIPTION_ID "$(AZURE_SUBSCRIPTION_ID)"
-                       if [ -n "$AZURE_LOCATION" ]; then
-                         azd env set AZURE_LOCATION "$AZURE_LOCATION"
-                       fi
-                       azd env refresh "$(AZURE_ENV_NAME)" --no-prompt
-                       azd deploy --no-prompt
+                    inlineScript: |
+                      curl -fsSL https://aka.ms/install-azd.sh | bash
+                      test -f azure.yaml || {
+                        echo "##vso[task.logissue type=error;sourcepath=azure.yaml]No azure.yaml found. Ask your coding agent to generate a zero-trust azd deployment, then re-run this pipeline."
+                        exit 1
+                      }
+                      azd env new "$(AZURE_ENV_NAME)" --no-prompt --subscription "$(AZURE_SUBSCRIPTION_ID)" ${AZURE_LOCATION:+--location "$AZURE_LOCATION"} \
+                        || azd env select "$(AZURE_ENV_NAME)"
+                      azd env set AZURE_SUBSCRIPTION_ID "$(AZURE_SUBSCRIPTION_ID)"
+                      if [ -n "$AZURE_LOCATION" ]; then
+                        azd env set AZURE_LOCATION "$AZURE_LOCATION"
+                      fi
+                      azd env refresh "$(AZURE_ENV_NAME)" --no-prompt
+                      azd deploy --no-prompt

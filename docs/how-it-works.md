@@ -6,10 +6,21 @@ This document is the single source of truth for understanding the AgentOps archi
 
 AgentOps is a **standalone Python CLI** that runs **standardized evaluation workflows** for AI agents and models. It:
 
-1. Reads YAML configuration (bundles, datasets, run specs).
+1. Reads the flat `agentops.yaml` configuration plus JSONL dataset rows.
 2. Executes evaluation against a target (Foundry agent, model deployment, HTTP endpoint, or local adapter).
 3. Produces normalized outputs: `results.json` (machine-readable) and `report.md` (human-readable).
 4. Returns **CI-friendly exit codes** (`0` = pass, `2` = threshold failure, `1` = error) so pipelines can gate on quality.
+5. Optionally writes release evidence (`evidence.json`, `evidence.md`) through `agentops doctor --evidence-pack` so a release reviewer can see eval, Doctor, workflow, Foundry, monitoring, AI Landing Zone, and trace-regression readiness in one place.
+
+AgentOps is intentionally a **Foundry companion**, not a competing portal.
+Microsoft Foundry remains the system of record for hosted agents, model
+deployments, cloud evaluations, datasets, runtime traces, monitoring,
+red teaming, active alerts, and operations. AgentOps owns the developer
+workflow around Foundry: source-controlled eval configuration, local and CI
+quality gates, normalized artifacts, PR reports, Doctor diagnostics,
+workflow generation, App Insights telemetry for CI/Doctor signals, and a
+local Cockpit that deep-links back into Foundry or Azure Monitor for
+drilldown.
 
 ### Key Principles
 
@@ -31,13 +42,14 @@ src/
     ├── __main__.py            # Enables `python -m agentops`
     │
     ├── cli/
-    │   └── app.py             # Typer CLI definition (init, eval run, report,
-    │                              # workflow, skills, mcp, agent)
+    │   └── app.py             # Typer CLI definition (init, eval analyze/run/promote-traces,
+    │                              # workflow analyze/generate, skills, mcp, agent)
     │
     ├── core/                  # Pure data layer - no Azure imports, no I/O
     │   ├── agentops_config.py # Flat 1.0 `agentops.yaml` Pydantic schema
     │   ├── config_loader.py   # YAML → AgentOpsConfig
     │   ├── evaluators.py      # Evaluator catalog (presets + auto-selection)
+    │   ├── release_evidence.py # ReleaseEvidence schema
     │   └── results.py         # RunResult / RowResult / TargetInfo / RunSummary
     │
     ├── pipeline/              # Run orchestration - ADD execution flows here
@@ -51,9 +63,13 @@ src/
     │   └── cloud_runner.py # New Foundry publish (server-side via OpenAI Evals API)
     │
     ├── services/              # Workspace / project tooling
+    │   ├── eval_analysis.py   # `agentops eval analyze` read-only triage
+    │   ├── workflow_analysis.py # `agentops workflow analyze` CI/CD triage
     │   ├── initializer.py     # `agentops init` workspace scaffolding
     │   ├── skills.py          # Coding agent skill installation
-    │   └── cicd.py            # CI/CD workflow generation
+    │   ├── cicd.py            # CI/CD workflow generation
+    │   ├── evidence_pack.py   # Release evidence aggregation/writer
+    │   └── trace_promotion.py # Trace export → dataset candidates
     │
     ├── agent/                 # `agentops doctor|serve` watchdog
     ├── mcp/                   # `agentops mcp serve` Model Context Protocol server
@@ -86,23 +102,113 @@ src/
 
 ## Request Flow (eval run)
 
+For an unfamiliar repo, run `agentops eval analyze` first. It is a read-only
+triage step: it inspects `agentops.yaml`, dataset columns, and local project
+signals, then tells you whether `agentops eval run` is ready or whether Copilot
+should use `agentops-config`, `agentops-dataset`, or `agentops-eval` to adapt
+the setup.
+
+```mermaid
+flowchart TD
+    A["agentops init"] --> B["agentops eval analyze"]
+    B --> C{"Eval setup ready?"}
+    C -->|yes| D["agentops eval run"]
+    C -->|no / complex| E["Copilot + AgentOps skills"]
+    E --> F["agentops-config / agentops-dataset / agentops-eval"]
+    F --> B
+    D --> G["results.json + report.md"]
+    G --> H["agentops workflow analyze"]
+    H --> I{"CI/CD shape clear?"}
+    I -->|yes| J["workflow generate --deploy-mode auto"]
+    I -->|complex accelerator| K["Copilot + agentops-workflow"]
+    J --> L["Deterministic CI/CD"]
+    K --> L
+    L --> M["agentops doctor"]
+    M --> N["doctor --evidence-pack"]
+    N --> O["agentops cockpit"]
+```
+
+For AI Landing Zone projects, `workflow analyze` surfaces the official
+`scripts/Invoke-PreflightChecks.ps1` path when present. Generated azd workflows
+run that preflight before `azd provision`, and Doctor reports AI Landing Zone
+deployment readiness under Operational Excellence so teams can see whether
+preflight, eval config, workflow deployment, and private-network runner planning
+are wired together.
+
 When you run `agentops eval run`, the following happens step by step:
 
+```mermaid
+flowchart TD
+    A["CLI parses args"] --> B["Load agentops.yaml"]
+    B --> C["classify_agent"]
+    C --> D["Pre-flight checks"]
+    D --> E["Read JSONL dataset"]
+    E --> F["Invoke target per row"]
+    F --> G["Run evaluators per row"]
+    G --> H["Aggregate metrics"]
+    H --> I["Evaluate thresholds"]
+    I --> J["Write results.json + report.md"]
+    J --> K["Sync .agentops/results/latest"]
+    K --> L{"Publish configured?"}
+    L -->|Classic| M["Upload local metrics to Foundry"]
+    L -->|Cloud| N["Submit server-side Foundry eval"]
+    L -->|No| O["Return exit code"]
+    M --> O
+    N --> O
 ```
- 1. CLI parses args               (cli/app.py → cmd_eval_run)
- 2. Loader parses agentops.yaml   (core/config_loader.py → AgentOpsConfig)
- 3. classify_agent resolves kind  (foundry_prompt | foundry_hosted | http_json | model_direct)
- 4. Pre-flight checks run         (pipeline/runtime.py - deps, creds, endpoint reachability)
- 5. Orchestrator iterates dataset (pipeline/orchestrator.py)
- 6. Per row: invoke target        (pipeline/invocations.py - picks Foundry / HTTP / model API)
- 7. Per row: run evaluators       (core/evaluators.py - auto-selected from row shape)
- 8. Aggregate metrics             (orchestrator builds RunResult)
- 9. Evaluate thresholds           (pipeline/thresholds.py - pass/fail per metric)
-10. Write results.json + report.md (pipeline/reporter.py)
-11. Sync .agentops/results/latest/
-12. (Optional) Publish local metrics to Classic Foundry (`publish: foundry`)
-    or additionally submit a server-side New Foundry run (`publish: foundry_cloud`)
-13. CLI returns exit code         (0 = pass, 2 = threshold fail, 1 = error)
+
+Exit codes are `0` when all thresholds pass, `2` when one or more thresholds
+fail, and `1` for runtime or configuration errors.
+
+## POC-to-production readiness flow
+
+AgentOps does not create a second production gate with a new exit-code
+contract. Instead, it projects the signals already produced by evals, Doctor,
+workflow files, Foundry control-plane checks, Azure Monitor, AI Landing Zone
+readiness, and trace-regression manifests into a release evidence pack:
+
+```mermaid
+flowchart LR
+    E["eval run"] --> R["results.json/report.md"]
+    R --> D["doctor"]
+    D --> P["doctor --evidence-pack"]
+    T["exported Foundry/App Insights traces"] --> PT["eval promote-traces --apply"]
+    PT --> M["trace-regression-manifest.json"]
+    M --> P
+    W["workflow generate"] --> P
+    P --> J["evidence.json/evidence.md"]
+```
+
+- `evidence.json` is the stable machine-readable contract (`version: 1`).
+- `evidence.md` is the PR/release-review summary.
+- `ready`, `ready_with_warnings`, and `blocked` are projections of existing
+  signals; eval and Doctor exit codes remain unchanged.
+- Trace promotion is local and review-first. `self-similarity` labels are useful
+  for drift detection, not human-verified correctness; use `--label-mode pending`
+  when a person must fill expected answers before the dataset can gate.
+
+## Analyze / Generate Boundary
+
+The `analyze` commands are intentionally deterministic and local-only. They do
+not call models, Copilot, Azure, Foundry, GitHub, or Azure DevOps. Their job is
+to say whether the next deterministic command is safe or whether the user should
+ask Copilot to apply the matching skill.
+
+When a skill handoff is needed, the analysis output keeps it copy/pasteable:
+it reports whether AgentOps Copilot skills are installed in the repo, suggests
+`agentops skills install --platform copilot` when they are missing, and prints a
+single prompt to paste into Copilot.
+
+```mermaid
+flowchart LR
+    EA["eval analyze"] --> ER["eval run"]
+    EA --> ES["Copilot skills when setup is ambiguous"]
+    ES --> ER
+    WA["workflow analyze"] --> WG["workflow generate"]
+    WA --> WS["Copilot workflow skill when deployment is project-specific"]
+    ER --> WA
+    WG --> CI["Deterministic CI/CD"]
+    WS --> CI
 ```
 
 ## CLI Commands
@@ -114,12 +220,15 @@ When you run `agentops eval run`, the following happens step by step:
 | `agentops init` | Idempotent scaffold + azd-style wizard + skill install (the only onboarding command) |
 | `agentops init show` | Inspect resolved config (`agentops.yaml` + `.azure/<env>/.env`) |
 | `agentops init explain` | Long-form `init` manual |
+| `agentops eval analyze` | Inspect eval setup and recommend direct run vs skill-assisted configuration |
 | `agentops eval run` | Run an evaluation; the main command |
 | `agentops eval run --baseline <results.json>` | Run an eval and add a baseline comparison section to the report |
+| `agentops eval promote-traces` | Convert local trace exports into reviewable regression dataset rows |
 | `agentops report generate` | Regenerate `report.md` from a `results.json` |
-| `agentops doctor` | Run the AgentOps Doctor (readiness, regression, OpEx, safety, history) |
+| `agentops doctor [--evidence-pack]` | Run the AgentOps Doctor and optionally write release evidence |
 | `agentops doctor explain` | Long-form Doctor manual |
 | `agentops cockpit` | Local read-only Cockpit UI (FastAPI) that links out to Foundry |
+| `agentops workflow analyze` | Inspect a repo and recommend CI/CD stages/deploy mode before generation |
 | `agentops workflow generate` | Generate CI/CD workflows for GitHub Actions or Azure DevOps |
 | `agentops skills install` | (Re)install coding-agent skills (Copilot or Claude) |
 | `agentops mcp serve` | Run AgentOps as an MCP server for code agents |
@@ -299,6 +408,55 @@ Example RAG row:
 {"input": "What is the refund policy?", "expected": "Refunds within 30 days.", "context": "Our policy: refunds available within 30 days of purchase."}
 ```
 
+### Local JSONL vs Foundry Data/Datasets
+
+The JSONL file referenced by `dataset:` is the AgentOps source of truth. It
+belongs in your repo, participates in code review, and is what local and CI
+runs read.
+
+When `execution: cloud` is used, Foundry executes the eval server-side.
+By default, AgentOps syncs the local JSONL to a stable Foundry dataset version
+and passes that dataset id to the OpenAI Evals API as `source: file_id`. The
+Foundry dataset name defaults to `agentops-<jsonl-stem>` and the version
+defaults to a content-hash prefix, so unchanged data is reused and changed data
+creates a new version.
+
+The inline compatibility path is still available with
+`dataset_sync.mode: inline`. In that mode, Foundry can materialize inline rows
+as backing project assets named like `eval-data-*` in **Data > Datasets**. Those
+assets are cloud-eval artifacts, not separate hand-authored AgentOps datasets.
+
+AgentOps records this lineage in `cloud_evaluation.json`:
+
+```json
+{
+  "dataset": {
+    "mode": "foundry",
+    "requested_mode": "auto",
+    "source_type": "file_id",
+    "local_path": ".agentops/data/smoke.jsonl",
+    "sha256": "...",
+    "foundry_name": "agentops-smoke",
+    "foundry_version": "sha256-..."
+  }
+}
+```
+
+You can pin the Foundry dataset identity or force inline compatibility:
+
+```yaml
+dataset: .agentops/data/smoke.jsonl
+dataset_sync:
+  mode: auto                  # auto | foundry | inline
+  name: agentops-smoke
+  version: content-hash
+```
+
+Use `dataset_sync.mode: foundry` when a pipeline must fail rather than fall
+back to inline data if dataset upload/reuse fails. Use
+`dataset_sync.mode: inline` for quick experiments or environments that do not
+have permission to create Foundry datasets.
+
 ## Evaluator auto-selection
 
 The catalog is defined in [src/agentops/core/evaluators.py](../src/agentops/core/evaluators.py).
@@ -368,8 +526,8 @@ The cloud-mode trade-offs (so you can decide consciously):
 
 * Foundry-side latency replaces the locally-measured wall-clock latency.
 * Judges are opaque (Foundry-managed); custom evaluators are skipped.
-* The dataset is uploaded as an OpenAI file (egress + transient storage
-  in your project).
+* The dataset is synced to Foundry Data/Datasets by default. Inline
+  compatibility remains available and may show `eval-data-*` backing assets.
 * Evaluator runs cost against your Azure OpenAI deployment.
 * Polling adds ~5 s × N to the total wall-clock time.
 

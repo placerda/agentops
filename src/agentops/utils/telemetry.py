@@ -57,6 +57,10 @@ def init_tracing() -> None:
     appinsights_connection_string = os.getenv(
         "APPLICATIONINSIGHTS_CONNECTION_STRING"
     ) or os.getenv("AGENTOPS_APPLICATIONINSIGHTS_CONNECTION_STRING")
+    if appinsights_connection_string and not _is_appinsights_connection_string(
+        appinsights_connection_string
+    ):
+        appinsights_connection_string = None
     otlp_endpoint = os.getenv("AGENTOPS_OTLP_ENDPOINT")
 
     if not appinsights_connection_string and not otlp_endpoint:
@@ -81,6 +85,7 @@ def init_tracing() -> None:
     # Azure may change the underlying schema - not that it is unsafe.
     # Users who want to opt out can set the env var to "false" explicitly.
     os.environ.setdefault("AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING", "true")
+    os.environ.setdefault("OTEL_SERVICE_NAME", "agentops")
 
     try:
         from opentelemetry import trace
@@ -92,9 +97,11 @@ def init_tracing() -> None:
         try:
             from azure.monitor.opentelemetry import configure_azure_monitor
 
-            configure_azure_monitor(
-                connection_string=appinsights_connection_string,
-            )
+            kwargs = {"connection_string": appinsights_connection_string}
+            resource = _agentops_resource()
+            if resource is not None:
+                kwargs["resource"] = resource
+            configure_azure_monitor(**kwargs)
             _tracer = trace.get_tracer("agentops")
             _tracing_enabled = True
             return
@@ -132,6 +139,30 @@ def init_tracing() -> None:
     except ImportError:
         # OTLP exporter not installed - tracing stays disabled
         pass
+
+
+def _is_appinsights_connection_string(value: str) -> bool:
+    """Return True for real App Insights connection strings.
+
+    CI systems can leave undefined variables as literal placeholders such
+    as ``$(APPLICATIONINSIGHTS_CONNECTION_STRING)``. Treat those as absent
+    so Foundry auto-discovery still has a chance to configure telemetry.
+    """
+    return "InstrumentationKey=" in value or "IngestionEndpoint=" in value
+
+
+def _agentops_resource() -> Optional[Any]:
+    try:
+        from opentelemetry.sdk.resources import Resource
+        import agentops
+    except Exception:  # noqa: BLE001
+        return None
+    return Resource.create(
+        {
+            "service.name": "agentops",
+            "service.version": getattr(agentops, "__version__", "0.0.0"),
+        }
+    )
 
 
 def shutdown() -> None:
@@ -369,6 +400,41 @@ def record_evaluator_span(
 
 
 # ---------------------------------------------------------------------------
+# Doctor finding spans
+# ---------------------------------------------------------------------------
+
+
+def record_agent_finding_span(finding: Any) -> None:
+    """Create a queryable child span for a single ``agentops doctor`` finding."""
+    if not _tracing_enabled or _tracer is None:
+        return
+
+    from opentelemetry.trace import SpanKind, StatusCode
+
+    finding_id = str(getattr(finding, "id", "") or "unknown")
+    severity = getattr(finding, "severity", None)
+    category = getattr(finding, "category", None)
+    severity_value = str(getattr(severity, "value", severity) or "")
+    category_value = str(getattr(category, "value", category) or "")
+
+    with _tracer.start_as_current_span(
+        f"doctor finding {finding_id}",
+        kind=SpanKind.INTERNAL,
+    ) as span:
+        span.set_attribute("agentops.agent.finding.id", finding_id)
+        span.set_attribute("agentops.agent.finding.severity", severity_value)
+        span.set_attribute("agentops.agent.finding.category", category_value)
+        span.set_attribute("agentops.agent.finding.title", str(getattr(finding, "title", "") or ""))
+        span.set_attribute("agentops.agent.finding.summary", str(getattr(finding, "summary", "") or ""))
+        span.set_attribute(
+            "agentops.agent.finding.recommendation",
+            str(getattr(finding, "recommendation", "") or ""),
+        )
+        span.set_attribute("agentops.agent.finding.source", str(getattr(finding, "source", "") or ""))
+        span.set_status(StatusCode.OK)
+
+
+# ---------------------------------------------------------------------------
 # Watchdog agent spans
 # ---------------------------------------------------------------------------
 
@@ -436,6 +502,6 @@ def set_agent_analyze_result(
     span.set_attribute(
         "agentops.agent.sources_enabled", ",".join(sorted(sources_enabled))
     )
-    # The watchdog itself completes successfully even when findings exist  - 
+    # The watchdog itself completes successfully even when findings exist  -
     # finding severity is observability, not pipeline failure.
     span.set_status(StatusCode.OK)

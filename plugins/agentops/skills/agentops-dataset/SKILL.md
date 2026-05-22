@@ -12,7 +12,9 @@ from `agentops.yaml`).
 ## Step 0 - Prerequisites
 
 1. `pip install "agentops-toolkit @ git+https://github.com/Azure/agentops.git@develop"` if `agentops` is missing.
-2. If `agentops.yaml` does not exist, run `agentops init` first (the init
+2. Run `agentops eval analyze` first. If it reports missing dataset columns or
+   recommends `agentops-dataset`, use this skill before the first eval run.
+3. If `agentops.yaml` does not exist, run `agentops init` first (the init
    wizard will prompt for the agent reference, project endpoint, and
    dataset path, then create a starter `.agentops/data/smoke.jsonl`).
 
@@ -51,6 +53,12 @@ One JSON object per line, no trailing commas, UTF-8:
 Save to the path referenced by `dataset:` in `agentops.yaml` (default
 `.agentops/data/smoke.jsonl`).
 
+This file is the AgentOps source of truth. In Foundry cloud evaluation,
+AgentOps syncs it to a stable Foundry dataset version by default and reuses the
+same Foundry dataset version while the JSONL content is unchanged. If the user
+forces `dataset_sync.mode: inline`, Foundry may show generated `eval-data-*`
+backing assets in the project Data/Datasets page.
+
 ## Step 4 - Sanity-check
 
 Run a quick eval and confirm rows are picked up:
@@ -69,3 +77,6 @@ matches.
   suites.
 - If the user already has a domain dataset, prefer pointing
   `agentops.yaml` at that file rather than generating new rows.
+- If the user asks why Foundry shows `eval-data-*`, explain that those are
+  cloud-eval backing assets from inline compatibility mode; normal cloud runs
+  should use the stable `agentops-*` Foundry dataset.

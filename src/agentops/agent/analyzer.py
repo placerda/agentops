@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, TypeVar
 
 from agentops.agent.checks.errors import run_errors_check
 from agentops.agent.checks.foundry_config import run_foundry_config_check
@@ -13,6 +15,7 @@ from agentops.agent.checks.opex_workspace import run_opex_workspace_check
 from agentops.agent.checks.opex import run_opex_check
 from agentops.agent.checks.posture import run_posture_check
 from agentops.agent.checks.regression import run_regression_check
+from agentops.agent.checks.release_readiness import run_release_readiness_check
 from agentops.agent.checks.safety import run_safety_check
 from agentops.agent.checks.spec_conformance import run_spec_conformance_check
 from agentops.agent.llm_assist import run_llm_assist_check
@@ -37,6 +40,8 @@ from agentops.agent.sources.results_history import (
     ResultsHistory,
     collect_results_history,
 )
+
+_T = TypeVar("_T")
 
 
 @dataclass
@@ -81,6 +86,7 @@ def analyze(
     *,
     categories: Optional[Iterable[str]] = None,
     exclude_rules: Optional[Iterable[str]] = None,
+    progress: Optional[Callable[[str], None]] = None,
 ) -> AnalysisResult:
     """Run every configured source + check and return the merged result.
 
@@ -89,18 +95,40 @@ def analyze(
     posture check to skip individual WAF rule ids on top of any
     exclusions configured in ``agent.yaml``.
     """
-    monitor = collect_azure_monitor(config.sources.azure_monitor, config.lookback_days)
-    foundry = collect_foundry_control(config.sources.foundry_control)
-    history = collect_results_history(
-        workspace,
-        config.sources.results_history,
-        foundry_config=config.sources.foundry_control,
-    )
+    notify = progress or (lambda _msg: None)
+    notify("doctor: collecting local history, Azure Monitor, and Foundry control plane")
+
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="agentops-doctor") as pool:
+        monitor_future = pool.submit(
+            _timed,
+            lambda: collect_azure_monitor(config.sources.azure_monitor, config.lookback_days),
+        )
+        foundry_future = pool.submit(
+            _timed,
+            lambda: collect_foundry_control(config.sources.foundry_control),
+        )
+        history_future = pool.submit(
+            _timed,
+            lambda: collect_results_history(
+                workspace,
+                config.sources.results_history,
+                foundry_config=config.sources.foundry_control,
+            ),
+        )
+
+        monitor, monitor_seconds = _finish_source("Azure Monitor", monitor_future, notify)
+        foundry, foundry_seconds = _finish_source("Foundry control plane", foundry_future, notify)
+        history, history_seconds = _finish_source("results history", history_future, notify)
+
+    resources_started = time.perf_counter()
     resources = collect_azure_resources(
         config.sources.azure_resources,
         workspace=workspace,
         project_endpoint=(foundry.diagnostics or {}).get("endpoint"),
     )
+    resources_seconds = time.perf_counter() - resources_started
+    notify(f"doctor: source Azure resources complete ({resources_seconds:.1f}s)")
+    notify("doctor: running readiness checks")
 
     posture_config = config.checks.posture
     if exclude_rules:
@@ -117,6 +145,7 @@ def analyze(
     findings.extend(run_posture_check(resources, posture_config))
     findings.extend(run_opex_workspace_check(workspace))
     findings.extend(run_opex_check(history, config.checks.opex))
+    findings.extend(run_release_readiness_check(workspace, history, foundry))
     findings.extend(
         run_spec_conformance_check(
             workspace, config.checks.operational_excellence.spec_conformance
@@ -151,6 +180,28 @@ def analyze(
             "azure_monitor": monitor.diagnostics,
             "foundry_control": foundry.diagnostics,
             "azure_resources": resources.diagnostics,
+            "source_timings_seconds": {
+                "results_history": round(history_seconds, 3),
+                "azure_monitor": round(monitor_seconds, 3),
+                "foundry_control": round(foundry_seconds, 3),
+                "azure_resources": round(resources_seconds, 3),
+            },
         },
         workspace=workspace,
     )
+
+
+def _timed(fn: Callable[[], _T]) -> tuple[_T, float]:
+    started = time.perf_counter()
+    value = fn()
+    return value, time.perf_counter() - started
+
+
+def _finish_source(
+    label: str,
+    future: Future[tuple[_T, float]],
+    progress: Callable[[str], None],
+) -> tuple[_T, float]:
+    value, seconds = future.result()
+    progress(f"doctor: source {label} complete ({seconds:.1f}s)")
+    return value, seconds

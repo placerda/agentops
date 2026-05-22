@@ -91,6 +91,12 @@ of the two — `AZURE_OPENAI_DEPLOYMENT` wins when both are set.
 
 ## 1. Ask Copilot to configure AgentOps
 
+First run deterministic triage so Copilot has a concrete starting point:
+
+```powershell
+agentops eval analyze
+```
+
 Prompt Copilot:
 
 ```text
@@ -162,6 +168,7 @@ trace mismatch, or threshold quality.
 Expected command:
 
 ```powershell
+agentops eval analyze
 agentops eval run
 ```
 
@@ -211,6 +218,7 @@ are required before I push it.
 Expected command:
 
 ```powershell
+agentops workflow analyze
 agentops workflow generate --kinds pr --force
 ```
 
@@ -287,6 +295,7 @@ wire placeholders to this repository's actual build and deploy commands.
 Expected command:
 
 ```powershell
+agentops workflow analyze
 agentops workflow generate --kinds pr,dev,qa,prod --deploy-mode auto --force
 ```
 

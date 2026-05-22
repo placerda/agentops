@@ -416,6 +416,68 @@ def test_run_wizard_empty_input_keeps_current(
     assert answers.appinsights_connection_string is None
 
 
+def test_run_wizard_appinsights_prompt_guides_autodiscovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The optional App Insights prompt should tell users they can press
+    Enter and rely on Foundry project auto-discovery instead of forcing a
+    connection string they may not know."""
+    monkeypatch.delenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", raising=False)
+    monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
+
+    messages: list[str] = []
+    prompt_defaults: list[object] = []
+
+    def prompt(_question: str, default):  # noqa: ANN001
+        prompt_defaults.append(default)
+        return ""
+
+    run_wizard(tmp_path, prompt=prompt, echo=messages.append)
+
+    assert any("auto-discover it from the Foundry project" in m for m in messages)
+    assert prompt_defaults[-1] is None
+
+
+def test_run_wizard_appinsights_reconfigure_masks_existing_secret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Reconfigure mode should not echo the full App Insights connection
+    string as a prompt default."""
+    monkeypatch.delenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", raising=False)
+    monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
+    _seed_azd_env(
+        tmp_path,
+        "dev",
+        {
+            "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT": (
+                "https://acct.services.ai.azure.com/api/projects/p"
+            ),
+            "APPLICATIONINSIGHTS_CONNECTION_STRING": (
+                "InstrumentationKey=abc;ApplicationId=secret1234"
+            ),
+        },
+    )
+    (tmp_path / "agentops.yaml").write_text(
+        "version: 1\nagent: keep:1\ndataset: keep.jsonl\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "keep.jsonl").write_text("{}\n", encoding="utf-8")
+
+    messages: list[str] = []
+    prompt_defaults: list[object] = []
+
+    def prompt(_question: str, default):  # noqa: ANN001
+        prompt_defaults.append(default)
+        return ""
+
+    run_wizard(tmp_path, prompt=prompt, echo=messages.append, reconfigure=True)
+
+    assert prompt_defaults[-1] is None
+    output = "\n".join(messages)
+    assert "secret1234" not in output
+    assert "1234" in output
+
+
 def test_run_wizard_re_prompts_on_invalid_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

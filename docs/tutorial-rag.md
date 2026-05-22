@@ -147,8 +147,12 @@ automatically.
 ## Part 5: Run evaluation
 
 ```powershell
+agentops eval analyze
 agentops eval run
 ```
+
+For RAG, `eval analyze` should report the `rag` scenario once the JSONL rows
+include `input`, `expected`, and `context`.
 
 This will:
 1. Send each `input` to the Foundry agent

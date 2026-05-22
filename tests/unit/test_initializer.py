@@ -9,12 +9,15 @@ def test_init_creates_flat_workspace(tmp_path: Path) -> None:
 
     agentops_yaml = tmp_path / "agentops.yaml"
     smoke_jsonl = tmp_path / ".agentops" / "data" / "smoke.jsonl"
+    sample_traces = tmp_path / ".agentops" / "traces" / "sample-traces.jsonl"
 
     assert agentops_yaml.is_file()
     assert smoke_jsonl.is_file()
+    assert sample_traces.is_file()
 
     assert agentops_yaml in result.created_files
     assert smoke_jsonl in result.created_files
+    assert sample_traces in result.created_files
     assert len(result.overwritten_files) == 0
 
     config = load_yaml(agentops_yaml)

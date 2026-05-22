@@ -97,6 +97,37 @@ def test_doctor_rejects_invalid_severity(tmp_path: Path) -> None:
     assert result.exit_code == 1
 
 
+def test_doctor_can_write_release_evidence_pack(tmp_path: Path) -> None:
+    (tmp_path / ".agentops").mkdir()
+    (tmp_path / ".agentops" / "agent.yaml").write_text(
+        _agent_yaml(), encoding="utf-8"
+    )
+    (tmp_path / "agentops.yaml").write_text(
+        "version: 1\nagent: support-agent:1\ndataset: .agentops/data/smoke.jsonl\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "--workspace",
+            str(tmp_path),
+            "--no-preflight",
+            "--evidence-pack",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    evidence_json = tmp_path / ".agentops" / "release" / "latest" / "evidence.json"
+    evidence_md = tmp_path / ".agentops" / "release" / "latest" / "evidence.md"
+    assert evidence_json.exists()
+    assert evidence_md.exists()
+    payload = json.loads(evidence_json.read_text(encoding="utf-8"))
+    assert payload["version"] == 1
+    assert payload["status"] == "blocked"
+
+
 def test_agent_analyze_alias_is_gone(tmp_path: Path) -> None:
     """The legacy `agentops agent analyze` alias was removed in the
     rename — invoking it should fail with Typer's 'no such command' exit

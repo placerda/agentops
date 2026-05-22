@@ -331,17 +331,54 @@ def _run_evaluation_cloud(
     from agentops.pipeline import cloud_runner
     from agentops.pipeline import cloud_results
 
-    published = cloud_runner.run_on_foundry_cloud(
-        shell_result,
-        dataset_path=dataset_path,
-        project_endpoint=endpoint,
-        progress=progress,
-    )
+    with telemetry.eval_run_span(
+        bundle_name=options.config_path.stem,
+        dataset_name=dataset_path.name,
+        backend_type="foundry_cloud",
+        target=target.raw,
+        model=target.deployment,
+        agent_id=target.raw,
+    ) as run_span:
+        published = cloud_runner.run_on_foundry_cloud(
+            shell_result,
+            dataset_path=dataset_path,
+            project_endpoint=endpoint,
+            dataset_sync=config.dataset_sync,
+            progress=progress,
+        )
 
-    rows = cloud_results.rows_from_cloud_output_items(published.output_items)
-    aggregate = _aggregate_metrics(rows)
-    threshold_results = thresholds.evaluate(threshold_rules, aggregate)
-    summary = _summarize(rows, threshold_results)
+        if run_span is not None:
+            run_span.set_attribute("agentops.eval.execution", "cloud")
+            run_span.set_attribute("agentops.eval.cloud.eval_id", published.eval_id)
+            run_span.set_attribute("agentops.eval.cloud.run_id", published.run_id)
+            run_span.set_attribute("agentops.eval.cloud.status", published.status)
+            if published.report_url:
+                run_span.set_attribute(
+                    "agentops.eval.cloud.report_url",
+                    published.report_url,
+                )
+            if published.dataset:
+                run_span.set_attribute(
+                    "agentops.eval.cloud.dataset.mode",
+                    str(published.dataset.get("mode") or ""),
+                )
+                dataset_id = published.dataset.get("id")
+                if dataset_id:
+                    run_span.set_attribute(
+                        "agentops.eval.cloud.dataset.id",
+                        str(dataset_id),
+                    )
+
+        rows = cloud_results.rows_from_cloud_output_items(published.output_items)
+        aggregate = _aggregate_metrics(rows)
+        threshold_results = thresholds.evaluate(threshold_rules, aggregate)
+        summary = _summarize(rows, threshold_results)
+        telemetry.set_eval_run_result(
+            run_span,
+            passed=summary.overall_passed,
+            items_total=summary.items_total,
+            items_passed=summary.items_passed_all,
+        )
 
     finished_at = datetime.now(timezone.utc)
     duration = time.perf_counter() - started_perf
@@ -369,6 +406,7 @@ def _run_evaluation_cloud(
                 "run_id": published.run_id,
                 "status": published.status,
                 "report_url": published.report_url,
+                "dataset": published.dataset,
             },
         },
     )

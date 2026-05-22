@@ -23,6 +23,7 @@ def test_root_explain_renders_cli_manual() -> None:
     assert "AGENTOPS EXPLAIN / detailed command guide" in stripped
     assert "AgentOps Toolkit" in stripped
     assert "operationalize AI agents on Microsoft Foundry" in stripped
+    assert "complements Foundry instead of replacing it" in stripped
     assert "COMMAND" in stripped
     assert "WHAT IT DOES" in stripped
     assert "COMMANDS" in stripped
@@ -45,7 +46,18 @@ def test_group_explain_alias_renders_group_docs() -> None:
     assert result.exit_code == 0, result.stdout
     stripped = _strip_ansi(result.stdout)
     assert "Evaluation commands" in stripped
+    assert "agentops eval analyze" in stripped
     assert "agentops eval run" in stripped
+
+
+def test_eval_analyze_explain_renders_manual() -> None:
+    result = runner.invoke(app, ["eval", "analyze", "explain"])
+
+    assert result.exit_code == 0, result.stdout
+    stripped = _strip_ansi(result.stdout)
+    assert "Analyze evaluation setup" in stripped
+    assert "agentops eval analyze" in stripped
+    assert "agentops-config" in stripped
 
 
 def test_leaf_explain_alias_renders_without_running_command() -> None:
@@ -55,6 +67,16 @@ def test_leaf_explain_alias_renders_without_running_command() -> None:
     stripped = _strip_ansi(result.stdout)
     assert "AgentOps Cockpit" in stripped
     assert "The local browser Cockpit" in stripped
+
+
+def test_workflow_analyze_explain_renders_manual() -> None:
+    result = runner.invoke(app, ["workflow", "analyze", "explain"])
+
+    assert result.exit_code == 0, result.stdout
+    stripped = _strip_ansi(result.stdout)
+    assert "Analyze CI/CD workflow shape" in stripped
+    assert "agentops workflow analyze" in stripped
+    assert "azure.yaml" in stripped
 
 
 def test_explain_can_write_markdown_for_any_command(tmp_path) -> None:

@@ -131,12 +131,56 @@ def test_all_templates_pass_foundry_and_evaluator_environment(tmp_path: Path) ->
         "${{ vars.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}",
         "AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}",
         "AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT }}",
+        "APPLICATIONINSIGHTS_CONNECTION_STRING: "
+        "${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING || "
+        "vars.APPLICATIONINSIGHTS_CONNECTION_STRING }}",
     )
     for rel in ALL_PATHS:
         content = (tmp_path / rel).read_text(encoding="utf-8")
 
         for env_line in expected_env:
             assert env_line in content
+
+
+def test_watchdog_templates_emit_doctor_findings_to_app_insights(tmp_path: Path) -> None:
+    generate_cicd_workflows(directory=tmp_path, kinds=["watchdog"])
+
+    content = (tmp_path / _WATCHDOG_PATH).read_text(encoding="utf-8")
+    assert 'agentops-toolkit[foundry,agent]' in content
+    assert "--evidence-pack" in content
+    assert ".agentops/release/latest/evidence.md" in content
+    assert (
+        "APPLICATIONINSIGHTS_CONNECTION_STRING: "
+        "${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING || "
+        "vars.APPLICATIONINSIGHTS_CONNECTION_STRING }}"
+    ) in content
+    assert "auto-discovers the Foundry project's Application Insights" in content
+
+    generate_cicd_workflows(
+        directory=tmp_path,
+        platform="azure-devops",
+        kinds=["watchdog"],
+        force=True,
+    )
+    ado_content = (tmp_path / _ADO_WATCHDOG).read_text(encoding="utf-8")
+    assert 'agentops-toolkit[foundry,agent]' in ado_content
+    assert "--evidence-pack" in ado_content
+    assert "agentops-watchdog-release-evidence" in ado_content
+    assert (
+        "APPLICATIONINSIGHTS_CONNECTION_STRING: "
+        "$(APPLICATIONINSIGHTS_CONNECTION_STRING)"
+    ) in ado_content
+
+
+def test_azure_devops_templates_pass_app_insights_for_eval_telemetry(tmp_path: Path) -> None:
+    generate_cicd_workflows(directory=tmp_path, platform="azure-devops")
+
+    for rel in _ADO_PATHS:
+        content = (tmp_path / rel).read_text(encoding="utf-8")
+        assert (
+            "APPLICATIONINSIGHTS_CONNECTION_STRING: "
+            "$(APPLICATIONINSIGHTS_CONNECTION_STRING)"
+        ) in content
 
 
 def test_pr_template_triggers_and_no_environment(tmp_path: Path) -> None:
@@ -150,6 +194,9 @@ def test_pr_template_triggers_and_no_environment(tmp_path: Path) -> None:
     assert "main" in content
 
     assert "agentops eval run" in content
+    assert "agentops doctor --workspace ." in content
+    assert "--evidence-pack" in content
+    assert ".agentops/release/latest/evidence.md" in content
     assert "agentops-toolkit" in content
     assert "azure/login@v2" in content
     assert "actions/setup-python@v5" in content
@@ -186,8 +233,31 @@ def test_auto_deploy_mode_uses_placeholder_without_azure_yaml(tmp_path: Path) ->
     assert "Deploy (placeholder)" in content
 
 
+def test_auto_deploy_mode_uses_prompt_agent_for_foundry_prompt_config(tmp_path: Path) -> None:
+    (tmp_path / "agentops.yaml").write_text(
+        "version: 1\nagent: quickstart-agent:2\ndataset: data.jsonl\n",
+        encoding="utf-8",
+    )
+
+    result = generate_cicd_workflows(directory=tmp_path, kinds=["dev"])
+    content = (tmp_path / _DEV_PATH).read_text(encoding="utf-8")
+
+    assert result.deploy_mode == "prompt-agent"
+    assert "agentops:deploy-mode=prompt-agent" in content
+    assert "prompt_deploy stage" in content
+    assert "agentops.candidate.yaml" in content
+    assert "needs: stage-candidate" in content
+    assert "needs: eval" in content
+    assert "Build (placeholder)" not in content
+    assert "Deploy (placeholder)" not in content
+
+
 def test_auto_deploy_mode_uses_azd_when_azure_yaml_exists(tmp_path: Path) -> None:
     (tmp_path / "azure.yaml").write_text("name: sample\n", encoding="utf-8")
+    (tmp_path / "agentops.yaml").write_text(
+        "version: 1\nagent: quickstart-agent:2\ndataset: data.jsonl\n",
+        encoding="utf-8",
+    )
 
     result = generate_cicd_workflows(directory=tmp_path, kinds=["dev"])
     content = (tmp_path / _DEV_PATH).read_text(encoding="utf-8")
@@ -200,6 +270,48 @@ def test_auto_deploy_mode_uses_azd_when_azure_yaml_exists(tmp_path: Path) -> Non
     assert "azd deploy --no-prompt" in content
     assert "Build (placeholder)" not in content
     assert "./agentops/deploy.sh" not in content
+    assert "__AILZ_PREFLIGHT_COMMAND__" not in content
+    assert "Invoke-PreflightChecks.ps1" not in content
+
+
+def test_azd_mode_runs_ailz_preflight_when_script_exists(tmp_path: Path) -> None:
+    (tmp_path / "azure.yaml").write_text("name: azure-ai-lz\n", encoding="utf-8")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "Invoke-PreflightChecks.ps1").write_text(
+        "Write-Host preflight\n",
+        encoding="utf-8",
+    )
+
+    result = generate_cicd_workflows(directory=tmp_path, kinds=["dev"])
+    content = (tmp_path / _DEV_PATH).read_text(encoding="utf-8")
+
+    assert result.deploy_mode == "azd"
+    assert "Running AI Landing Zone preflight" in content
+    assert "pwsh ./scripts/Invoke-PreflightChecks.ps1 -Strict" in content
+    assert content.index("Invoke-PreflightChecks.ps1") < content.index("azd provision --no-prompt")
+
+
+def test_azure_devops_azd_mode_runs_ailz_preflight_when_script_exists(tmp_path: Path) -> None:
+    (tmp_path / "azure.yaml").write_text("name: azure-ai-lz\n", encoding="utf-8")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "Invoke-PreflightChecks.ps1").write_text(
+        "Write-Host preflight\n",
+        encoding="utf-8",
+    )
+
+    result = generate_cicd_workflows(
+        directory=tmp_path,
+        platform="azure-devops",
+        kinds=["dev"],
+    )
+    content = (tmp_path / _ADO_DEV).read_text(encoding="utf-8")
+
+    assert result.deploy_mode == "azd"
+    assert isinstance(_read_yaml(tmp_path / _ADO_DEV), dict)
+    assert "Running AI Landing Zone preflight" in content
+    assert "pwsh ./scripts/Invoke-PreflightChecks.ps1 -Strict" in content
 
 
 def test_force_azd_deploy_mode_without_azure_yaml(tmp_path: Path) -> None:
@@ -212,6 +324,44 @@ def test_force_azd_deploy_mode_without_azure_yaml(tmp_path: Path) -> None:
     assert "No azure.yaml found" in content
     assert "azd provision --no-prompt" in content
     assert "azd deploy --no-prompt" in content
+
+
+def test_force_prompt_agent_deploy_mode_without_agentops_yaml(tmp_path: Path) -> None:
+    result = generate_cicd_workflows(
+        directory=tmp_path, kinds=["prod"], deploy_mode="prompt-agent"
+    )
+    content = (tmp_path / _PROD_PATH).read_text(encoding="utf-8")
+
+    assert result.deploy_mode == "prompt-agent"
+    assert "AgentOps Deploy (PROD)" in content
+    assert "Safety eval candidate (gate)" in content
+    assert "prompt_deploy stage" in content
+    assert "foundry-agent-prod-deployment" in content
+    assert "--evidence-pack" in content
+
+
+def test_prompt_agent_deploy_templates_are_valid_yaml(tmp_path: Path) -> None:
+    generate_cicd_workflows(
+        directory=tmp_path,
+        kinds=["dev", "qa", "prod"],
+        deploy_mode="prompt-agent",
+    )
+    for rel in (_DEV_PATH, _QA_PATH, _PROD_PATH):
+        data = _read_yaml(tmp_path / rel)
+        assert isinstance(data, dict)
+        assert "jobs" in data
+
+    generate_cicd_workflows(
+        directory=tmp_path,
+        platform="azure-devops",
+        kinds=["dev", "qa", "prod"],
+        deploy_mode="prompt-agent",
+        force=True,
+    )
+    for rel in (_ADO_DEV, _ADO_QA, _ADO_PROD):
+        data = _read_yaml(tmp_path / rel)
+        assert isinstance(data, dict)
+        assert "stages" in data
 
 
 def test_qa_template_triggers_and_environment(tmp_path: Path) -> None:
@@ -234,6 +384,9 @@ def test_prod_template_triggers_and_environment_with_reviewer_hint(tmp_path: Pat
     assert "main" in content
     assert "environment: production" in content
     assert "agentops eval run" in content
+    assert "agentops doctor --workspace ." in content
+    assert "--evidence-pack" in content
+    assert ".agentops/release/latest/evidence.json" in content
     # Prod uses safety-eval as the gate name and warns about reviewers
     assert "safety-eval" in content
     assert "Required reviewers" in content or "REQUIRED REVIEWERS" in content
@@ -244,7 +397,7 @@ def test_all_kinds_constant_matches_documented_set() -> None:
 
 
 def test_deploy_modes_constant_matches_documented_set() -> None:
-    assert set(DEPLOY_MODES) == {"auto", "placeholder", "azd"}
+    assert set(DEPLOY_MODES) == {"auto", "placeholder", "azd", "prompt-agent"}
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +468,8 @@ def test_cli_next_steps_mention_environments(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     out = result.stdout
+    assert "Deploy mode" in out
+    assert "placeholder (auto default)" in out
     assert "Next steps" in out
     assert "dev" in out and "qa" in out and "production" in out
     assert "OIDC" in out or "Workload Identity Federation" in out
@@ -362,6 +517,8 @@ def test_azure_devops_pr_template_uses_ado_idioms(tmp_path: Path) -> None:
     assert "AZURE_SERVICE_CONNECTION" in content
     # PR comment marker preserved across platforms.
     assert "<!-- agentops-pr-report -->" in content
+    assert "--evidence-pack" in content
+    assert "agentops-pr-release-evidence" in content
 
 
 def test_azure_devops_deploy_templates_use_deployment_job(tmp_path: Path) -> None:
@@ -373,6 +530,9 @@ def test_azure_devops_deploy_templates_use_deployment_job(tmp_path: Path) -> Non
         assert "deployment: agentops_eval_and_deploy" in content
         assert f"TARGET_ENVIRONMENT\n    value: {env}" in content
         assert "agentops eval run" in content
+        if env == "production":
+            assert "--evidence-pack" in content
+            assert "release-evidence" in content
 
 
 def test_azure_devops_azd_deploy_mode_uses_azd_lifecycle(tmp_path: Path) -> None:
@@ -387,11 +547,30 @@ def test_azure_devops_azd_deploy_mode_uses_azd_lifecycle(tmp_path: Path) -> None
     content = (tmp_path / _ADO_DEV).read_text(encoding="utf-8")
 
     assert result.deploy_mode == "azd"
+    assert isinstance(_read_yaml(tmp_path / _ADO_DEV), dict)
     assert "curl -fsSL https://aka.ms/install-azd.sh | bash" in content
     assert content.count("azd env new") == 2
     assert "azd provision --no-prompt" in content
     assert "azd env refresh" in content
     assert "azd deploy --no-prompt" in content
+    assert "./agentops/deploy.sh" not in content
+
+
+def test_azure_devops_prompt_agent_deploy_mode_uses_candidate_gate(tmp_path: Path) -> None:
+    result = generate_cicd_workflows(
+        directory=tmp_path,
+        platform="azure-devops",
+        kinds=["dev"],
+        deploy_mode="prompt-agent",
+    )
+    content = (tmp_path / _ADO_DEV).read_text(encoding="utf-8")
+
+    assert result.deploy_mode == "prompt-agent"
+    assert "agentops:deploy-mode=prompt-agent" in content
+    assert "prompt_deploy stage" in content
+    assert "agentops.candidate.yaml" in content
+    assert "dependsOn: stage_candidate" in content
+    assert "foundry-agent-dev-deployment" in content
     assert "./agentops/deploy.sh" not in content
 
 

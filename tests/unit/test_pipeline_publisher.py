@@ -255,6 +255,10 @@ def test_run_evaluation_cloud_uses_cloud_runner_and_does_not_invoke_locally(
         status="completed",
         report_url="https://ai.azure.com/foundry/runs/run-1",
         evaluation_name="agentops-cloud-abc",
+        dataset={
+            "mode": "foundry",
+            "id": "azureai://accounts/a/projects/p/data/d/versions/v",
+        },
         output_items=[
             {
                 "datasource_item": {"input": "hi", "expected": "hello"},
@@ -274,6 +278,10 @@ def test_run_evaluation_cloud_uses_cloud_runner_and_does_not_invoke_locally(
             },
         ],
     )
+    span = mock.Mock()
+    span_cm = mock.MagicMock()
+    span_cm.__enter__.return_value = span
+    span_cm.__exit__.return_value = False
 
     with mock.patch.object(
         _cp, "run_on_foundry_cloud", return_value=fake_published,
@@ -281,7 +289,11 @@ def test_run_evaluation_cloud_uses_cloud_runner_and_does_not_invoke_locally(
         publisher, "publish_to_foundry",
     ) as classic_mock, mock.patch.object(
         orchestrator, "_evaluate_row",
-    ) as evaluate_row_mock:
+    ) as evaluate_row_mock, mock.patch.object(
+        orchestrator.telemetry, "eval_run_span", return_value=span_cm,
+    ) as eval_span_mock, mock.patch.object(
+        orchestrator.telemetry, "set_eval_run_result",
+    ) as set_eval_result_mock:
         options = orchestrator.RunOptions(
             config_path=tmp_path / "agentops.yaml",
             output_dir=output_dir,
@@ -292,6 +304,14 @@ def test_run_evaluation_cloud_uses_cloud_runner_and_does_not_invoke_locally(
     evaluate_row_mock.assert_not_called()
     classic_mock.assert_not_called()
     cloud_mock.assert_called_once()
+    eval_span_mock.assert_called_once()
+    assert eval_span_mock.call_args.kwargs["backend_type"] == "foundry_cloud"
+    set_eval_result_mock.assert_called_once()
+    assert set_eval_result_mock.call_args.kwargs["items_total"] == 2
+    span.set_attribute.assert_any_call("agentops.eval.execution", "cloud")
+    span.set_attribute.assert_any_call("agentops.eval.cloud.eval_id", "eval-1")
+    span.set_attribute.assert_any_call("agentops.eval.cloud.run_id", "run-1")
+    span.set_attribute.assert_any_call("agentops.eval.cloud.dataset.mode", "foundry")
 
     # Per-row results came from the cloud output_items.
     assert len(result.rows) == 2

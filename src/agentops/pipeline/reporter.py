@@ -132,8 +132,37 @@ def _render_cloud_evaluation(cloud: dict) -> List[str]:
         lines.append(f"- **Run ID:** `{cloud['run_id']}`")
     if cloud.get("report_url"):
         lines.append(f"- **Foundry URL:** {cloud['report_url']}")
+    dataset = cloud.get("dataset")
+    if isinstance(dataset, dict):
+        lines.extend(_render_cloud_dataset(dataset))
     if cloud.get("error"):
         lines.append(f"- **Error:** {_cell(str(cloud['error']), 300)}")
+    return lines
+
+
+def _render_cloud_dataset(dataset: dict) -> List[str]:
+    source_type = str(dataset.get("source_type") or "unknown")
+    requested = str(dataset.get("requested_mode") or dataset.get("mode") or "unknown")
+    if source_type == "file_content":
+        label = "inline file_content"
+        behavior = dataset.get("foundry_behavior")
+    elif dataset.get("foundry_name"):
+        label = (
+            f"Foundry dataset `{dataset.get('foundry_name')}`"
+            f"@`{dataset.get('foundry_version') or 'unknown'}`"
+        )
+        behavior = None
+    else:
+        label = source_type
+        behavior = None
+
+    lines = [f"- **Dataset:** {label} (requested `{requested}`)"]
+    if dataset.get("local_path"):
+        lines.append(f"  - Local source: `{dataset['local_path']}`")
+    if dataset.get("sha256"):
+        lines.append(f"  - SHA-256: `{str(dataset['sha256'])[:12]}...`")
+    if behavior:
+        lines.append(f"  - Note: {_cell(str(behavior), 300)}")
     return lines
 
 

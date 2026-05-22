@@ -62,7 +62,7 @@ stages:
                 set +e
                 python -m pip install --upgrade pip
                 # NOTE: pinned to develop branch until AgentOps 1.0 lands on PyPI.
-                python -m pip install "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@develop"
+                python -m pip install "agentops-toolkit[foundry,agent] @ git+https://github.com/Azure/agentops.git@develop"
                 agentops eval run --config "$(AGENTOPS_CONFIG)"
                 ec=$?
                 echo "##vso[task.setvariable variable=evalExitCode;isOutput=true]$ec"
@@ -73,11 +73,18 @@ stages:
                 else
                   echo "##vso[task.setvariable variable=evalResult;isOutput=true]error"
                 fi
-                exit $ec
+                agentops doctor --workspace . --out .agentops/agent/report.md \
+                  --severity-fail critical --evidence-pack
+                doctor_ec=$?
+                if [ $ec -ne 0 ]; then
+                  exit $ec
+                fi
+                exit $doctor_ec
             env:
               AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: $(AZURE_AI_FOUNDRY_PROJECT_ENDPOINT)
               AZURE_OPENAI_ENDPOINT: $(AZURE_OPENAI_ENDPOINT)
               AZURE_OPENAI_DEPLOYMENT: $(AZURE_OPENAI_DEPLOYMENT)
+              APPLICATIONINSIGHTS_CONNECTION_STRING: $(APPLICATIONINSIGHTS_CONNECTION_STRING)
 
           - task: PublishPipelineArtifact@1
             displayName: Upload AgentOps results
@@ -87,11 +94,25 @@ stages:
               artifact: agentops-pr-results
               publishLocation: pipeline
 
+          - task: PublishPipelineArtifact@1
+            displayName: Upload AgentOps release evidence
+            condition: always()
+            inputs:
+              targetPath: .agentops/release/latest
+              artifact: agentops-pr-release-evidence
+              publishLocation: pipeline
+
           - bash: |
               if [ -f .agentops/results/latest/report.md ]; then
                 cat .agentops/results/latest/report.md
               else
                 echo "No report.md produced."
+              fi
+              if [ -f .agentops/release/latest/evidence.md ]; then
+                echo
+                echo "---"
+                echo
+                cat .agentops/release/latest/evidence.md
               fi
             displayName: Print report.md to log
             condition: always()
@@ -108,6 +129,9 @@ stages:
               fi
               MARKER='<!-- agentops-pr-report -->'
               BODY="$(printf '%s\n' "$MARKER"; cat .agentops/results/latest/report.md)"
+              if [ -f .agentops/release/latest/evidence.md ]; then
+                BODY="$(printf '%s\n\n---\n\n%s' "$BODY" "$(cat .agentops/release/latest/evidence.md)")"
+              fi
               ORG_URL="$(System.CollectionUri)"
               PROJECT="$(System.TeamProject)"
               REPO_ID="$(Build.Repository.ID)"

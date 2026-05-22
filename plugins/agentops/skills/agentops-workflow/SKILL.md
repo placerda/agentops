@@ -6,8 +6,8 @@ description: Set up the full GenAIOps GitFlow CI/CD scaffold for an AgentOps pro
 # AgentOps Workflow
 
 Help the user wire AgentOps into a real GenAIOps GitFlow CI/CD setup with
-three environments (`dev`, `qa`, `production`) and an automatic eval gate
-on every change.
+three environments (`dev`, `qa`, `production`), automatic eval gates, and
+release evidence for production-readiness reviews.
 
 **Pick the platform up front.** AgentOps supports two:
 
@@ -17,20 +17,26 @@ on every change.
   Azure DevOps Pipelines. Auth via a Service Connection + a variable
   group named `agentops`.
 
-The conceptual workflows are identical: one PR gate plus three deploy
-stages (dev/qa/prod). Pick the platform that matches where the
-repository lives. If unclear, ask the user.
+The conceptual workflows are identical: one PR gate, three deploy stages
+(dev/qa/prod), and a scheduled Doctor workflow. PR, production, and watchdog
+templates run `agentops doctor --evidence-pack` so reviewers get
+`evidence.json` and `evidence.md` in artifacts.
 
 For a new repository or tutorial, start with the PR gate only:
 `agentops workflow generate --kinds pr`. Generate DEV/QA/PROD deploy
 workflows only after environments, Azure auth, and real build/deploy
 commands are configured.
 
-AgentOps is **azd-first** for deployment. Do not invent a parallel
-deployment system and do not hand-write bespoke deploy scripts when azd
-can own the lifecycle. AgentOps should gate quality; `azd provision`,
-`azd deploy`, and azd hooks should own infrastructure, packaging, and
-deployment.
+For copied accelerators or unfamiliar repos (for example GPT-RAG, Live Voice
+Practice, AI Landing Zone/Bicep-based apps), run `agentops workflow analyze`
+first and use the findings as the implementation plan before generating or
+editing workflows.
+
+AgentOps is **azd-first** for app/infrastructure deployment and
+**Foundry-native** for prompt-agent deployment. Do not invent a parallel
+deployment system. AgentOps should gate quality; `azd provision`, `azd
+deploy`, and azd hooks should own infrastructure/app packaging, while
+Foundry owns prompt-agent versions created through the Foundry SDK.
 
 ## Branch model assumed
 
@@ -50,13 +56,27 @@ and have them generate `--kinds pr,dev,prod`.
 ## Step 0 - Prerequisites
 
 1. `pip install "agentops-toolkit @ git+https://github.com/Azure/agentops.git@develop"` if `agentops` is missing.
-2. `agentops.yaml` exists at the project root and `agentops eval run`
-   works locally.
+2. `agentops eval analyze` has been reviewed, `agentops.yaml` exists at the
+   project root, and `agentops eval run` works locally.
 3. The user's repo follows GitFlow (or is willing to). If not, ask which
    branches map to dev/qa/prod and adjust the triggers after
    generation.
 
 ## Step 1 - Generate the workflows
+
+First analyze the repo shape:
+
+```bash
+agentops workflow analyze
+agentops workflow analyze --format markdown --out agentops-workflow-plan.md
+```
+
+Use the analysis to decide whether `--deploy-mode auto` is enough or whether
+you need to adapt placeholders/project-specific deployment. The analyzer is
+local-only and looks for `azure.yaml`, Bicep, AgentOps prompt-agent config,
+landing-zone manifests, private-network signals, Docker/Container Apps signals,
+and existing CI folders. Treat README matches as hints only; structural files
+drive the recommendation.
 
 **GitHub Actions (default):**
 
@@ -84,15 +104,21 @@ The full scaffold writes:
 | `prod` | `.github/workflows/agentops-deploy-prod.yml` | `.azuredevops/pipelines/agentops-deploy-prod.yml` | push to `main` | `production` |
 | `watchdog` | `.github/workflows/agentops-watchdog.yml` | `.azuredevops/pipelines/agentops-watchdog.yml` | daily cron (06:00 UTC) | `dev` |
 
+PR, PROD, and watchdog workflows upload release evidence. Explain that this is
+a projection of existing eval/Doctor/Foundry/monitoring signals, not a separate
+exit-code contract.
+
 Useful flags:
 
 - `--platform github | azure-devops` - pick the CI/CD platform.
 - `--force` - overwrite existing workflow files.
 - `--kinds pr,dev,qa,prod` - generate a subset. Prefer `--kinds pr`
   until deploy environments are configured.
-- `--deploy-mode auto|placeholder|azd` - `auto` uses azd templates when
-  `azure.yaml` exists; `azd` forces `azd provision` / `azd deploy`
-  templates; `placeholder` keeps the generic stack-agnostic scaffold.
+- `--deploy-mode auto|placeholder|azd|prompt-agent` - `auto` uses azd
+  templates when `azure.yaml` exists, otherwise uses prompt-agent templates
+  when `agentops.yaml` targets a Foundry prompt agent; `azd` forces
+  `azd provision` / `azd deploy`; `prompt-agent` stages/evaluates a Foundry
+  prompt candidate; `placeholder` keeps the generic stack-agnostic scaffold.
 - `--dir <path>` - non-default repo root.
 
 ## Step 2 - Configure environments and Azure auth
@@ -127,6 +153,8 @@ with these variables (mark sensitive ones as secret if needed):
 - `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`
 - `AZURE_OPENAI_ENDPOINT`
 - `AZURE_OPENAI_DEPLOYMENT`
+- `APPLICATIONINSIGHTS_CONNECTION_STRING` - optional fallback if the
+  Foundry project's App Insights connection cannot be auto-discovered.
 
 In **Project settings → Service connections**, create an Azure Resource
 Manager service connection named `agentops-azure` scoped to the
@@ -148,11 +176,20 @@ At repository level (Settings → Secrets and variables → Actions →
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT` - Foundry project URL used by the
   eval step.
+- `APPLICATIONINSIGHTS_CONNECTION_STRING` - optional fallback as a
+  variable or secret. Generated workflows first try to auto-discover App
+  Insights from the Foundry project endpoint; this value makes eval and
+  Doctor telemetry explicit.
 
 Then configure Workload Identity Federation on the Azure side
 (`federated-credentials` on the app registration) for **each branch /
 environment** the workflows will run from. See
 `docs/ci-github-actions.md` for the exact `az` commands.
+
+Tell the user that CI evals emit `agentops.eval.*` telemetry and scheduled
+Doctor runs emit `agentops.agent.finding.*` telemetry when App Insights is
+configured or auto-discovered. The Cockpit uses those signals for Azure
+Monitor deep links.
 
 ### Azure DevOps (Service Connection)
 
@@ -206,10 +243,58 @@ Never call ad-hoc hook scripts from the workflow (for example
 `./agentops/deploy.sh` or `./.azd/hooks/*`). If custom behavior is
 needed, put it behind azd's native hook mechanism in `azure.yaml`.
 
+### Copied accelerators / AI Landing Zone apps
+
+For Azure AI accelerators copied from templates, use AgentOps to make the
+landing-zone path actionable:
+
+1. AgentOps owns eval gates, Doctor, reports, Cockpit readiness, and the
+   workflow guardrails around deployment.
+2. Foundry owns hosted agents, evaluations, traces, monitoring, datasets, and
+   operations.
+3. azd/Bicep/AILZ owns app and infrastructure deploy when `azure.yaml` or
+   `infra/*.bicep` exists.
+4. Project-specific steps such as indexing, data seeding, model deployment,
+   container build/push, App Config updates, or private-network post-provision
+   work stay in azd hooks or existing project tooling.
+
+If `scripts/Invoke-PreflightChecks.ps1` exists, keep it in the deployment path:
+AgentOps-generated azd workflows run it with `-Strict` before `azd provision`.
+Doctor surfaces the same path as `AI Landing Zone deployment readiness`, with
+evidence for preflight, `agentops.yaml`, azd workflow coverage, network
+isolation, and the private runner path.
+
+If `agentops workflow analyze` reports network isolation, private endpoints,
+jumpbox/Bastion, Azure Firewall, or ACR Tasks, do not assume GitHub-hosted
+runners can deploy everything. Plan self-hosted runner, jumpbox handoff, or ACR
+Tasks agent-pool execution before enabling DEV/QA/PROD deploy stages.
+
 If `azure.yaml` is missing and the user is not asking to create the
-deployment assets yet, generate `--kinds pr` only or use
-`--deploy-mode placeholder`. Do not ship DEV/QA/PROD workflows that
-pretend deployment is wired when azd is not ready.
+deployment assets yet, check whether this is a Foundry prompt agent. If
+`agentops.yaml` has `agent: "name:version"`, prefer prompt-agent mode:
+
+```bash
+agentops workflow generate --kinds pr,dev,qa,prod --deploy-mode prompt-agent --force
+```
+
+Prompt-agent workflows:
+
+1. read `prompt_file` from `agentops.yaml` or
+   `AGENTOPS_AGENT_PROMPT_FILE`;
+2. create or reuse a candidate Foundry prompt-agent version from that file;
+3. generate `.agentops/deployments/agentops.candidate.yaml`;
+4. run `agentops eval run` against the candidate version;
+5. record `.agentops/deployments/foundry-agent.json` as a deployment
+   artifact only when the gate passes.
+
+This avoids the bad pattern of evaluating one agent version and deploying a
+different prompt. The invariant is: **evaluated version == deployed version**.
+Foundry remains the system of record for agent versions; AgentOps owns the
+repo-side gate and deployment record.
+
+If this is not a Foundry prompt agent and azd is not ready, generate
+`--kinds pr` only or use `--deploy-mode placeholder`. Do not ship
+DEV/QA/PROD workflows that pretend deployment is wired.
 
 ## Step 5 - Branch protection
 
@@ -241,15 +326,18 @@ Common follow-ups:
 
 ## Guardrails
 
-- Do **not** invent CLI flags. The supported `workflow generate` flags
-  are `--force`, `--dir`, `--kinds`, `--platform`, and
-  `--deploy-mode`.
+- Do **not** invent CLI flags. The supported `workflow analyze` flags are
+  `--dir`, `--format`, and `--out`. The supported `workflow generate` flags are
+  `--force`, `--dir`, `--kinds`, `--platform`, and `--deploy-mode`.
 - Do **not** push DEV/QA/PROD deploy workflows with placeholder
   Build/Deploy steps or missing OIDC variables; generate PR-only first.
 - Do **not** create parallel workflow files. Prefer editing the
   generated ones.
-- Do **not** auto-fill deployment with raw Azure CLI steps that bypass
-  azd. AgentOps gates; azd provisions and deploys.
+- Do **not** auto-fill app/infrastructure deployment with raw Azure CLI
+  steps that bypass azd. AgentOps gates; azd provisions and deploys. For
+  Foundry prompt agents, use `--deploy-mode prompt-agent` so the workflow
+  calls the Foundry SDK and evaluates the candidate version before marking
+  it deployed.
 - The four workflow names (`agentops-pr`, `agentops-deploy-dev`,
   `agentops-deploy-qa`, `agentops-deploy-prod`) are fixed - don't rename
   them or branch-protection wiring will break.

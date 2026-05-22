@@ -28,6 +28,17 @@ agentops doctor
 `0` = clean, `2` = a finding meets the configured `--severity-fail`
 floor, `1` = the analyzer itself errored.
 
+For release reviews, add the evidence flag:
+
+```bash
+agentops doctor --evidence-pack
+```
+
+That writes `.agentops/release/latest/evidence.json` and `evidence.md`. The
+evidence pack summarizes eval, baseline, Doctor, CI/CD workflow, Foundry
+continuous-eval, monitoring, AI Landing Zone, and trace-regression readiness
+without creating a second exit-code contract.
+
 ## 2. The four signal sources
 
 | Source | Reads | Feeds these checks | When it's "ok" |
@@ -56,7 +67,7 @@ project that never even configured App Insights does not show up as
   skipped (no `app_insights_resource_id`) or returns an empty
   workspace (zero requests over the lookback window).
 * `opex.no_foundry_control_configured` fires when `foundry_control` is
-  skipped (no `project_endpoint`) or cannot be read. A reachable Foundry
+   skipped (no `project_endpoint`) or cannot be read. A reachable Foundry
   project with zero agents is treated as source context, not a finding,
   because the agent may be deployed through HTTP, Container Apps, AKS, or
   another runtime.
@@ -65,6 +76,35 @@ Both rules stay silent when the source is explicitly
 `enabled: false`. That is how you tell the Doctor "this project does
 not use that backend" - the missing backend is treated as a
 deliberate opt-out rather than a gap.
+
+### AI Landing Zone deployment readiness
+
+Doctor also reads local AI Landing Zone signals from the workspace: `azure.yaml`,
+`manifest.json`, `scripts/Invoke-PreflightChecks.ps1`, generated AgentOps deploy
+workflows, and common network-isolation markers. When it sees canonical AI
+Landing Zone evidence, it emits an Operational Excellence summary
+(`opex.ailz_readiness`) and, if needed, one aggregated warning
+(`opex.ailz_gaps`) with the missing readiness dimensions.
+
+The intent is positive and practical: AgentOps helps move the project toward an
+AI Landing Zone-ready deployment path by checking that the official preflight,
+azd/Bicep workflow, AgentOps eval config, private-network runner plan, and
+post-deploy Doctor/eval evidence are wired together.
+
+### Production release readiness
+
+Doctor also emits Operational Excellence findings for the POC-to-production
+journey:
+
+- latest eval evidence exists and passed;
+- a baseline/comparison exists for regression decisions;
+- a trace-regression manifest exists when production traces have been promoted;
+- Foundry continuous evaluation is enabled when the control plane is reachable.
+
+These findings feed the optional evidence pack. A `blocked` evidence status means
+the release reviewer should stop; `ready_with_warnings` means the release can be
+reviewed with explicit gaps. The underlying Doctor exit code still depends only
+on `--severity-fail`.
 
 ### Extension point: Microsoft 365 Copilot agents
 
@@ -108,7 +148,7 @@ admin consent), and a larger surface of preview APIs (Power Platform
 agent endpoints are still moving). It is intentionally not in the
 current release.
 
-## 3. The eight checks
+## 3. The check families
 
 | Check | Category | Headline question |
 |---|---|---|
@@ -117,7 +157,7 @@ current release.
 | `errors` | `reliability` | Are production errors / Foundry failures above threshold? *Or* is telemetry connected but silent? |
 | `safety` | `responsible_ai` | Three layers: eval content-safety hits, runtime content-filter triggers, missing / disabled continuous-eval rules. |
 | `posture` | `security` | WAF-AI Security pillar - local-auth, managed identity, diagnostic settings. |
-| `opex_workspace` | `operational_excellence` | Workspace hygiene - pinning, gates, deploy workflows, results gitignore, dataset/bundle versioning, workflow concurrency / SHA pinning. |
+| `opex_workspace` | `operational_excellence` | Workspace hygiene - pinning, gates, deploy workflows, results gitignore, dataset/bundle versioning, workflow concurrency / SHA pinning, AI Landing Zone deployment readiness. |
 | `opex` | `operational_excellence` | Time-based - stale eval runs + flaky-metric drift. |
 | `spec_conformance` | `operational_excellence` | Does the implementation match the spec? (spec-kit `.specify/`, `AGENTS.md`, Copilot instructions.) |
 
@@ -130,7 +170,7 @@ current release.
 | `reliability` | Error rate under threshold, Foundry runs succeeding, telemetry producing data. |
 | `security` | WAF-AI Security pillar findings empty - local-auth disabled, MI configured, diagnostic settings flowing. |
 | `responsible_ai` | No content-filter hits in eval or production, continuous evaluation rules attached and enabled. |
-| `operational_excellence` | Workspace + CI hygiene clean - versioned datasets / bundles, PR + deploy gates, no stale evals, no flaky metrics, and the implementation matches the spec. |
+| `operational_excellence` | Workspace + CI hygiene clean - versioned datasets / bundles, PR + deploy gates, AI Landing Zone readiness when applicable, no stale evals, no flaky metrics, and the implementation matches the spec. |
 
 ## 4b. Spec-conformance rules
 
@@ -345,12 +385,12 @@ members and CI.
 
 ## 10. Standards we anchor to
 
-- **Microsoft Well-Architected Framework for AI workloads**  - 
+- **Microsoft Well-Architected Framework for AI workloads**  -
   https://learn.microsoft.com/azure/well-architected/ai/. Source of
   truth for the *categories* of items (security, reliability,
   performance, operational excellence) and for the WAF pillar /
   area labels in the knowledge base CSV.
-- **Microsoft Azure AI Landing Zones Checklist**  - 
+- **Microsoft Azure AI Landing Zones Checklist**  -
   https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/ai/.
   Source of truth for the curated set of Azure-specific checks that
   ship in `.agentops/waf-checklist.csv`. Each Doctor finding cites

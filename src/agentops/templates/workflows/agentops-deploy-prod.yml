@@ -72,15 +72,26 @@ jobs:
       - name: Install AgentOps Toolkit
         run: |
           # NOTE: pinned to develop branch until AgentOps 1.0 lands on PyPI.
-          # Switch to `uv pip install --system "agentops-toolkit[foundry]"` after the 1.0 release.
-          uv pip install --system "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@develop"
+          # Switch to `uv pip install --system "agentops-toolkit[foundry,agent]"` after the 1.0 release.
+          uv pip install --system "agentops-toolkit[foundry,agent] @ git+https://github.com/Azure/agentops.git@develop"
 
       - name: Run AgentOps eval (production gate)
         env:
           AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ vars.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
           AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT }}
+          APPLICATIONINSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING || vars.APPLICATIONINSIGHTS_CONNECTION_STRING }}
         run: agentops eval run --config "${{ inputs.config || 'agentops.yaml' }}"
+
+      - name: Generate release evidence
+        env:
+          AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ vars.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT }}
+          APPLICATIONINSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING || vars.APPLICATIONINSIGHTS_CONNECTION_STRING }}
+        run: |
+          agentops doctor --workspace . --out .agentops/agent/report.md \
+            --severity-fail critical --evidence-pack
 
       - name: Upload AgentOps results
         if: always()
@@ -91,6 +102,9 @@ jobs:
             .agentops/results/latest/results.json
             .agentops/results/latest/report.md
             .agentops/results/latest/cloud_evaluation.json
+            .agentops/agent/report.md
+            .agentops/release/latest/evidence.json
+            .agentops/release/latest/evidence.md
           if-no-files-found: warn
 
       - name: Step summary
@@ -101,6 +115,12 @@ jobs:
             echo
             if [ -f .agentops/results/latest/report.md ]; then
               cat .agentops/results/latest/report.md
+            fi
+            if [ -f .agentops/release/latest/evidence.md ]; then
+              echo
+              echo "---"
+              echo
+              cat .agentops/release/latest/evidence.md
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

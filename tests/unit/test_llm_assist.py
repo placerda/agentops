@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from pathlib import Path
 from typing import Any, Dict, Optional
 from unittest.mock import patch
@@ -109,7 +111,9 @@ def test_disabled_config_returns_empty(tmp_path: Path) -> None:
     assert findings == []
 
 
-def test_no_deployment_returns_empty(tmp_path: Path) -> None:
+def test_no_deployment_returns_empty(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", raising=False)
+    monkeypatch.delenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", raising=False)
     config = LLMAssistCheckConfig(enabled=True)  # no deployment / no env
     findings = run_llm_assist_check(tmp_path, config, _foundry_with_agent("..."))
     assert findings == []
@@ -418,3 +422,64 @@ def test_judge_writes_and_reads_cache(tmp_path: Path) -> None:
     cached = judge._read_cache("abc123")
     assert cached is not None
     assert cached["verdict"]["risk"] == "low"
+
+
+def test_judge_uses_project_get_openai_client(monkeypatch, tmp_path: Path) -> None:
+    calls: dict[str, Any] = {}
+
+    class FakeProjectClient:
+        def __init__(self, *, endpoint, credential):
+            calls["endpoint"] = endpoint
+            calls["credential"] = credential
+
+        def get_openai_client(self):
+            return "openai-client"
+
+    class FakeCredential:
+        def __init__(self, **kwargs):
+            calls["credential_kwargs"] = kwargs
+
+    projects_module = types.ModuleType("azure.ai.projects")
+    projects_module.AIProjectClient = FakeProjectClient  # type: ignore[attr-defined]
+    identity_module = types.ModuleType("azure.identity")
+    identity_module.DefaultAzureCredential = FakeCredential  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "azure.ai.projects", projects_module)
+    monkeypatch.setitem(sys.modules, "azure.identity", identity_module)
+
+    judge = LLMJudge(config=_enabled_config(), workspace=tmp_path)
+
+    assert judge._get_client() == "openai-client"
+    assert calls["endpoint"] == "https://test.api.azureml.ms"
+    assert calls["credential_kwargs"]["process_timeout"] == 30
+
+
+def test_judge_falls_back_to_inference_get_openai_client(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class FakeInference:
+        def get_openai_client(self):
+            return "legacy-openai-client"
+
+    class FakeProjectClient:
+        inference = FakeInference()
+
+        def __init__(self, *, endpoint, credential):
+            pass
+
+    class FakeCredential:
+        def __init__(self, **kwargs):
+            pass
+
+    projects_module = types.ModuleType("azure.ai.projects")
+    projects_module.AIProjectClient = FakeProjectClient  # type: ignore[attr-defined]
+    identity_module = types.ModuleType("azure.identity")
+    identity_module.DefaultAzureCredential = FakeCredential  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "azure.ai.projects", projects_module)
+    monkeypatch.setitem(sys.modules, "azure.identity", identity_module)
+
+    judge = LLMJudge(config=_enabled_config(), workspace=tmp_path)
+
+    assert judge._get_client() == "legacy-openai-client"

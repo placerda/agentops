@@ -18,7 +18,21 @@ End-to-end workflow: install → init → configure → run → read report.
    (`--project-endpoint`, `--agent`, `--dataset`, …) for non-interactive
    runs. Run `agentops init show` later to inspect the resolved config.
 
-## Step 1 - Identify the agent target
+## Step 1 - Analyze evaluation setup
+
+Run the deterministic local triage first:
+
+```bash
+agentops eval analyze
+```
+
+Use its output to decide whether the repo is ready for `agentops eval run` or
+needs skill-assisted setup. If it recommends `agentops-config`, fix the target
+and protocol. If it recommends `agentops-dataset`, create/map realistic JSONL
+rows. If it recommends `agentops-eval`, inspect the app scenario and evaluator
+expectations before running.
+
+## Step 2 - Identify the agent target
 
 Read the codebase (README, entry point, env vars) and pick the right value
 for the `agent:` field of `agentops.yaml`:
@@ -32,7 +46,7 @@ for the `agent:` field of `agentops.yaml`:
 
 If nothing is found, ask the user once for the agent identifier.
 
-## Step 2 - Make sure the dataset exists
+## Step 3 - Make sure the dataset exists
 
 `agentops.yaml` points to a JSONL file (default
 `.agentops/data/smoke.jsonl`). Each row needs at least `input` and a label
@@ -40,7 +54,7 @@ that maps to the metric you care about (`expected`, `context`,
 `tool_calls`...). If the dataset is empty or unrelated, run the
 `agentops-dataset` skill before running the eval.
 
-## Step 3 - Run the evaluation
+## Step 4 - Run the evaluation
 
 ```bash
 agentops eval run
@@ -58,7 +72,7 @@ Exit codes:
 - `2` - succeeded but at least one threshold failed (gate-friendly)
 - `1` - runtime/configuration error
 
-## Step 4 - Inspect results
+## Step 5 - Inspect results and release evidence
 
 ```bash
 agentops report generate                   # regenerate report.md from latest results.json
@@ -70,7 +84,36 @@ Open `.agentops/results/latest/report.md`. To compare two runs, hand both
 `--baseline <previous-results.json>` so AgentOps adds a **Comparison vs
 Baseline** section to the report.
 
-## Step 5 - (Optional) Foundry execution / visibility
+For production promotion, generate the Doctor evidence pack:
+
+```bash
+agentops doctor --evidence-pack
+```
+
+Open `.agentops/release/latest/evidence.md`. It summarizes eval, baseline,
+Doctor, workflow, Foundry, monitoring, AI Landing Zone, and trace-regression
+readiness without creating a second exit-code contract.
+
+## Step 5b - (Optional) Promote reviewed traces to regression rows
+
+If the user has exported Foundry/App Insights traces, preview candidate
+regression rows first:
+
+```bash
+agentops eval promote-traces --source <traces.jsonl>
+```
+
+Only write files after review:
+
+```bash
+agentops eval promote-traces --source <traces.jsonl> --apply
+```
+
+Default `self-similarity` labels are for drift detection, not human-verified
+ground truth. Use `--label-mode pending` when reviewers must fill expected
+answers before the dataset gates releases.
+
+## Step 6 - (Optional) Foundry execution / visibility
 
 Two modes are supported. Both write a deep-link into
 `.agentops/results/latest/cloud_evaluation.json` and require
@@ -88,15 +131,23 @@ publish: true
 **New Foundry Evaluations panel** (preview): Foundry runs the agent +
 evaluators server-side via the OpenAI Evals API. Only works for
 `name:version` Foundry agents. `publish` is implicit - a cloud run is
-always recorded by Foundry.
+always recorded by Foundry. The local JSONL remains the dataset source of
+truth; AgentOps syncs it to Foundry Data/Datasets by default and uses that
+dataset version in the Evals run.
 
 ```yaml
 execution: cloud
 # project_endpoint: "https://<resource>.services.ai.azure.com/api/projects/<p>"
+dataset_sync:
+  mode: auto            # sync local JSONL to Foundry Data/Datasets
 ```
 
 With `execution: local` and no `publish: true`, AgentOps runs locally
 and only writes local artifacts.
+
+After a cloud run, inspect `.agentops/results/latest/cloud_evaluation.json`.
+Its `dataset` block explains whether the run used inline rows or a Foundry
+dataset reference.
 
 ## Tips
 

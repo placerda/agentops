@@ -28,7 +28,7 @@ you copy a command, you see an artefact, you keep moving.
   carrying `tool_definitions` and the expected `tool_calls`.
 - Two evaluation runs (a tool-using **v1** baseline and a degraded
   **v2** that answers from memory) compared side-by-side. The
-  baseline-vs-degraded delta shows tool-call accuracy collapse  - 
+  baseline-vs-degraded delta shows tool-call accuracy collapse  -
   exactly the kind of regression CI is meant to catch.
 - Four GitFlow workflows (`pr`, `dev`, `qa`, `prod`) wired to your
   own GitHub repository, gated on threshold pass/fail.
@@ -307,8 +307,13 @@ quality stack. When AgentOps loads the dataset it picks:
 ## 5. Run your first evaluation
 
 ```powershell
+agentops eval analyze
 agentops eval run
 ```
+
+`eval analyze` is the pre-run triage. It checks the configured target,
+dataset columns, and scenario hint, and it tells you to use the AgentOps
+skills before `eval run` if the setup is ambiguous.
 
 The CLI:
 
@@ -426,8 +431,13 @@ intentionally want to demonstrate a red quality gate.
 ## 7. Generate the GitFlow workflows
 
 ```powershell
+agentops workflow analyze
 agentops workflow generate
 ```
+
+`workflow analyze` explains whether the repo should use azd deployment,
+Foundry prompt-agent deployment, or skill-assisted project-specific workflow
+adaptation before files are generated.
 
 Five files appear under `.github/workflows/`:
 
@@ -897,7 +907,7 @@ tool-calling agent. From here:
 - **Per-scenario tutorials** - adapt the dataset shape to your own
   agent:
   - [`tutorial-rag.md`](tutorial-rag.md) - retrieval-augmented agents.
-  - [`tutorial-agent-workflow.md`](tutorial-agent-workflow.md)  - 
+  - [`tutorial-agent-workflow.md`](tutorial-agent-workflow.md)  -
     focused tool-calling reference (single-tool variants, HTTP-hosted
     agents, dataset shape details).
   - [`tutorial-conversational-agent.md`](tutorial-conversational-agent.md)
@@ -906,12 +916,12 @@ tool-calling agent. From here:
     deployed outside Foundry (ACA, AKS, custom).
   - [`tutorial-model-direct.md`](tutorial-model-direct.md) - raw
     model deployments without an agent layer.
-- **Deeper baseline workflows**  - 
+- **Deeper baseline workflows**  -
   [`tutorial-baseline-comparison.md`](tutorial-baseline-comparison.md).
-- **Watchdog as a Copilot extension**  - 
+- **Watchdog as a Copilot extension**  -
   [`tutorial-agent-doctor.md`](tutorial-agent-doctor.md).
-- **CI/CD reference**  - 
+- **CI/CD reference**  -
   [`ci-github-actions.md`](ci-github-actions.md).
-- **Architecture and concepts**  - 
+- **Architecture and concepts**  -
   [`how-it-works.md`](how-it-works.md),
   [`concepts.md`](concepts.md).

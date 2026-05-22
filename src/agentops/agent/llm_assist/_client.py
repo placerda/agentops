@@ -244,7 +244,14 @@ class LLMJudge:
             )
             # Foundry exposes get_openai_client without an api_version arg;
             # never pass one (the SDK picks the right version).
-            self._client = project_client.inference.get_openai_client()
+            get_openai_client = getattr(project_client, "get_openai_client", None)
+            if get_openai_client is None:
+                inference = getattr(project_client, "inference", None)
+                get_openai_client = getattr(inference, "get_openai_client", None)
+            if get_openai_client is None:
+                log.info("llm_assist: AIProjectClient has no OpenAI client helper")
+                return None
+            self._client = get_openai_client()
         except Exception as exc:  # pragma: no cover
             log.warning("llm_assist: openai client init failed: %s", exc)
             return None

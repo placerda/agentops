@@ -25,6 +25,7 @@ _TEMPLATE_PACKAGE = "agentops.templates"
 _FLAT_FILES: Dict[str, str] = {
     "agentops.yaml": "agentops.yaml",
     ".agentops/data/smoke.jsonl": "smoke.jsonl",
+    ".agentops/traces/sample-traces.jsonl": "sample-traces.jsonl",
     ".agentops/waf-checklist.csv": "waf-checklist.csv",
     ".agentops/waf-checklist.README.md": "waf-checklist.README.md",
 }

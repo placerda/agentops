@@ -21,6 +21,7 @@ mcp = ["mcp>=1.0,<2"]
 foundry = [
   "azure-ai-evaluation>=1.0",
   "azure-identity>=1.17",
+  "azure-monitor-opentelemetry>=1.6",
   "pandas>=2.0",
 ]
 agent = [
@@ -50,6 +51,7 @@ where = ["src"]
   "agentops.yaml",
   "agent.yaml",
   "smoke.jsonl",
+  "sample-traces.jsonl",
   "icon.png",
   "foundry.svg",
   ".gitignore",

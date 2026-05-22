@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agentops.agent.config import AzureMonitorSourceConfig
+from agentops.agent.findings import Category, Finding, Severity
 from agentops.agent.sources import azure_monitor
 from agentops.core.agentops_config import AgentOpsConfig
 from agentops.pipeline.orchestrator import RunOptions, run_evaluation
@@ -21,6 +22,7 @@ from agentops.utils.telemetry import (
     init_tracing,
     is_enabled,
     record_evaluator_span,
+    record_agent_finding_span,
     set_eval_item_result,
     set_eval_run_result,
 )
@@ -70,6 +72,19 @@ class TestTracingDisabledByDefault:
             passed=True,
         )
 
+    def test_record_agent_finding_span_noop(self) -> None:
+        finding = Finding(
+            id="quality-regression",
+            severity=Severity.WARNING,
+            title="Quality regressed",
+            summary="Score dropped.",
+            recommendation="Review the failing eval rows.",
+            source="results_history",
+            category=Category.QUALITY,
+        )
+
+        record_agent_finding_span(finding)
+
 
 class TestInitTracingWithoutEndpoint:
     def test_no_init_without_env_var(self) -> None:
@@ -88,6 +103,27 @@ class TestInitTracingWithoutEndpoint:
 
             init_tracing()
             assert is_enabled() is False
+
+    def test_placeholder_app_insights_env_var_is_ignored(self, monkeypatch) -> None:
+        import agentops.utils.telemetry as tel
+
+        tel._tracing_enabled = False
+        tel._tracer = None
+
+        monkeypatch.setenv(
+            "APPLICATIONINSIGHTS_CONNECTION_STRING",
+            "$(APPLICATIONINSIGHTS_CONNECTION_STRING)",
+        )
+        monkeypatch.delenv(
+            "AGENTOPS_APPLICATIONINSIGHTS_CONNECTION_STRING",
+            raising=False,
+        )
+        monkeypatch.delenv("AGENTOPS_OTLP_ENDPOINT", raising=False)
+        monkeypatch.delenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", raising=False)
+
+        init_tracing()
+
+        assert is_enabled() is False
 
 
 class TestInitTracingWithoutOtelInstalled:
@@ -264,6 +300,34 @@ class TestSpanAttributesWhenEnabled:
         assert calls["agentops.eval.evaluator.criteria"] == ">="
         assert calls["agentops.eval.evaluator.passed"] is True
 
+    def test_record_agent_finding_span(self) -> None:
+        finding = Finding(
+            id="quality-regression",
+            severity=Severity.WARNING,
+            title="Quality regressed",
+            summary="Score dropped.",
+            recommendation="Review the failing eval rows.",
+            source="results_history",
+            category=Category.QUALITY,
+        )
+
+        record_agent_finding_span(finding)
+
+        self.mock_tracer.start_as_current_span.assert_called_with(
+            "doctor finding quality-regression",
+            kind=pytest.importorskip("opentelemetry.trace").SpanKind.INTERNAL,
+        )
+
+        calls = {
+            call.args[0]: call.args[1]
+            for call in self.mock_span.set_attribute.call_args_list
+        }
+        assert calls["agentops.agent.finding.id"] == "quality-regression"
+        assert calls["agentops.agent.finding.severity"] == "warning"
+        assert calls["agentops.agent.finding.category"] == "quality"
+        assert calls["agentops.agent.finding.title"] == "Quality regressed"
+        assert calls["agentops.agent.finding.recommendation"] == "Review the failing eval rows."
+
     def test_eval_run_span_name(self) -> None:
         with eval_run_span(
             bundle_name="my_bundle",
@@ -281,20 +345,32 @@ class TestSpanAttributesWhenEnabled:
 def test_application_insights_connection_string_initializes_azure_monitor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: dict[str, str] = {}
+    calls: dict[str, object] = {}
 
     trace_module = types.ModuleType("opentelemetry.trace")
     trace_module.get_tracer = lambda name: ("tracer", name)  # type: ignore[attr-defined]
 
     opentelemetry_module = types.ModuleType("opentelemetry")
     opentelemetry_module.trace = trace_module  # type: ignore[attr-defined]
+    opentelemetry_sdk_module = types.ModuleType("opentelemetry.sdk")
+    resources_module = types.ModuleType("opentelemetry.sdk.resources")
+
+    class Resource:
+        @classmethod
+        def create(cls, attributes: dict[str, str]) -> tuple[str, dict[str, str]]:
+            calls["resource_attributes"] = attributes
+            return ("resource", attributes)
+
+    setattr(resources_module, "Resource", Resource)
 
     azure_module = types.ModuleType("azure")
     azure_monitor_module = types.ModuleType("azure.monitor")
     azure_monitor_otel_module = types.ModuleType("azure.monitor.opentelemetry")
 
-    def configure_azure_monitor(*, connection_string: str) -> None:
+    def configure_azure_monitor(**kwargs: object) -> None:
+        connection_string = kwargs["connection_string"]
         calls["connection_string"] = connection_string
+        calls["resource"] = kwargs.get("resource")
 
     setattr(
         azure_monitor_otel_module,
@@ -304,6 +380,8 @@ def test_application_insights_connection_string_initializes_azure_monitor(
 
     monkeypatch.setitem(sys.modules, "opentelemetry", opentelemetry_module)
     monkeypatch.setitem(sys.modules, "opentelemetry.trace", trace_module)
+    monkeypatch.setitem(sys.modules, "opentelemetry.sdk", opentelemetry_sdk_module)
+    monkeypatch.setitem(sys.modules, "opentelemetry.sdk.resources", resources_module)
     monkeypatch.setitem(sys.modules, "azure", azure_module)
     monkeypatch.setitem(sys.modules, "azure.monitor", azure_monitor_module)
     monkeypatch.setitem(
@@ -316,17 +394,24 @@ def test_application_insights_connection_string_initializes_azure_monitor(
         "InstrumentationKey=00000000-0000-0000-0000-000000000000",
     )
     monkeypatch.delenv("AGENTOPS_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
 
     init_tracing()
 
-    assert calls == {
-        "connection_string": "InstrumentationKey=00000000-0000-0000-0000-000000000000"
-    }
+    assert calls["connection_string"] == (
+        "InstrumentationKey=00000000-0000-0000-0000-000000000000"
+    )
+    assert calls["resource"] is not None
+    resource_attributes = calls["resource_attributes"]
+    assert isinstance(resource_attributes, dict)
+    assert resource_attributes["service.name"] == "agentops"
+    assert "service.version" in resource_attributes
     assert is_enabled() is True
     # Default-on for GenAI tracing so the Azure SDK warning ("Set
     # AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true …") is silenced and
     # prompts/responses are captured as span attributes.
     assert os.environ.get("AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING") == "true"
+    assert os.environ.get("OTEL_SERVICE_NAME") == "agentops"
 
 
 def test_genai_tracing_env_var_not_overwritten_if_user_set_it(

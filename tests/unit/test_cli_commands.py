@@ -42,6 +42,9 @@ def test_eval_help_does_not_expose_compare_subcommand() -> None:
 
     assert result.exit_code == 0
     stripped = _strip_ansi(result.stdout)
+    assert "analyze" in stripped
+    assert "promote-traces" in stripped
+    assert "run" in stripped
     assert "compare" not in stripped
 
 
@@ -62,6 +65,15 @@ def test_cockpit_command_wired() -> None:
     assert "cockpit" in stripped.lower()
     assert "Reads ``" not in stripped
     assert "pip install agentops-toolkit" not in stripped
+
+
+def test_workflow_command_exposes_analyze_and_generate() -> None:
+    result = runner.invoke(app, ["workflow", "--help"])
+
+    assert result.exit_code == 0
+    stripped = _strip_ansi(result.stdout)
+    assert "analyze" in stripped
+    assert "generate" in stripped
 
 
 def test_agent_command_group_wired() -> None:

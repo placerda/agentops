@@ -61,6 +61,16 @@ def test_report_includes_foundry_cloud_session_from_config():
         "run_id": "run-1",
         "status": "completed",
         "report_url": "https://ai.azure.com/foundry/runs/run-1",
+        "dataset": {
+            "mode": "foundry",
+            "requested_mode": "auto",
+            "source_type": "file_id",
+            "local_path": ".agentops/data/smoke.jsonl",
+            "sha256": "abc123def456",
+            "foundry_name": "agentops-smoke",
+            "foundry_version": "sha256-abc123",
+            "foundry_id": "azureai://accounts/a/projects/p/data/agentops-smoke/versions/sha256-abc123",
+        },
     }
 
     text = reporter.render(result)
@@ -69,3 +79,5 @@ def test_report_includes_foundry_cloud_session_from_config():
     assert "**Evaluation:** `agentops-cloud-abc`" in text
     assert "**Run ID:** `run-1`" in text
     assert "https://ai.azure.com/foundry/runs/run-1" in text
+    assert "**Dataset:** Foundry dataset `agentops-smoke`@`sha256-abc123` (requested `auto`)" in text
+    assert ".agentops/data/smoke.jsonl" in text

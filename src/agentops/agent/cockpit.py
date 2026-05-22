@@ -1076,6 +1076,51 @@ def _foundry_deeplinks(workspace: Path) -> Dict[str, Optional[str]]:
     }
 
 
+def _latest_cloud_dataset_lineage(workspace: Path) -> Optional[Dict[str, Any]]:
+    """Return dataset lineage from the latest cloud evaluation metadata."""
+    results_root = workspace / ".agentops" / "results"
+    if not results_root.is_dir():
+        return None
+    candidates = [results_root / "latest" / "cloud_evaluation.json"]
+    dated = [
+        entry / "cloud_evaluation.json"
+        for entry in sorted(results_root.iterdir(), key=lambda p: p.name, reverse=True)
+        if entry.is_dir() and entry.name != "latest"
+    ]
+    candidates.extend(dated)
+    for meta in candidates:
+        if not meta.exists():
+            continue
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        dataset = data.get("dataset") if isinstance(data, dict) else None
+        if isinstance(dataset, dict):
+            return dataset
+    return None
+
+
+def _foundry_dataset_description(workspace: Path) -> str:
+    dataset = _latest_cloud_dataset_lineage(workspace)
+    if not dataset:
+        return (
+            "Foundry-owned eval datasets. AgentOps local JSONL files are the "
+            "source of truth; cloud runs sync them to Foundry."
+        )
+    if dataset.get("source_type") == "file_content":
+        return (
+            "Latest cloud run used local JSONL inline; Foundry may show "
+            "eval-data-* backing assets for that run."
+        )
+    foundry_name = dataset.get("foundry_name")
+    foundry_version = dataset.get("foundry_version")
+    if foundry_name:
+        suffix = f"@{foundry_version}" if foundry_version else ""
+        return f"Latest cloud run used Foundry dataset {foundry_name}{suffix}."
+    return "Dataset lineage for the latest cloud run."
+
+
 def _resolve_foundry_project_root(workspace: Path) -> Optional[str]:
     """Pull the project-root prefix (everything before ``/build/...``) out
     of the most recent cloud_evaluation.json. Returns ``None`` when there
@@ -1124,6 +1169,7 @@ def _with_tenant(url: str) -> str:
 
 
 _TENANT_CACHE: Dict[str, Optional[str]] = {}
+_AZ_ACCOUNT_SHOW_TIMEOUT_SECONDS = 30
 
 
 def _az_tenant_id() -> Optional[str]:
@@ -1143,7 +1189,7 @@ def _az_tenant_id() -> Optional[str]:
                 [az, "account", "show", "--query", "tenantId", "-o", "tsv"],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=_AZ_ACCOUNT_SHOW_TIMEOUT_SECONDS,
             )
             if result.returncode == 0:
                 value = result.stdout.strip()
@@ -1407,6 +1453,7 @@ def _telemetry_status() -> Dict[str, Any]:
     project = os.getenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
 
     if explicit_conn:
+        portal_url = _appinsights_portal_url(explicit_conn)
         return {
             "enabled": True,
             "source": "env",
@@ -1416,7 +1463,11 @@ def _telemetry_status() -> Dict[str, Any]:
                 "Resolved from the APPLICATIONINSIGHTS_CONNECTION_STRING "
                 "environment variable."
             ),
-            "portal_url": _appinsights_portal_url(explicit_conn),
+            "portal_url": portal_url,
+            "eval_runs_url": _appinsights_eval_runs_portal_url(explicit_conn),
+            "doctor_findings_url": _appinsights_doctor_findings_portal_url(
+                explicit_conn,
+            ),
             "tone": "ok",
         }
     if otlp:
@@ -1439,12 +1490,15 @@ def _telemetry_status() -> Dict[str, Any]:
             conn = None
             reason = f"discovery raised {type(exc).__name__}: {exc}"
         if conn:
+            portal_url = _appinsights_portal_url(conn)
             return {
                 "enabled": True,
                 "source": "discovery",
                 "label": "App Insights",
                 "detail": "Auto-discovered from the Foundry project endpoint.",
-                "portal_url": _appinsights_portal_url(conn),
+                "portal_url": portal_url,
+                "eval_runs_url": _appinsights_eval_runs_portal_url(conn),
+                "doctor_findings_url": _appinsights_doctor_findings_portal_url(conn),
                 "tone": "ok",
             }
         # Surface the actual reason inline so the user does not have to
@@ -1498,15 +1552,95 @@ def _appinsights_portal_url(connection_string: Optional[str]) -> Optional[str]:
     if not m:
         return None
     app_id = m.group(1)
-    # ApplicationInsights-Extension landing query inspecting recent AgentOps spans.
+    # Keep the portal landing query intentionally narrow. The Logs blade can
+    # spend a long time scanning generic request/dependency tables, especially
+    # when the portal time picker is set to 24h+ and "show 500000 results".
+    # Start users on the two signals that matter for AgentOps demos:
+    # local/CI AgentOps spans and Azure AI / Foundry outbound dependencies.
     query = (
-        "union dependencies, requests, traces"
-        "\n| where timestamp > ago(1h)"
-        "\n| where name has 'ANALYZE' or name has 'RUN ' or name has 'eval_item' "
-        "or name has 'invoke_agent' or name has 'evaluator' or name has 'chat'"
+        "let lookback = 24h;"
+        "\nlet agentops_requests = requests"
+        "\n| where timestamp > ago(lookback)"
+        "\n| where cloud_RoleName has_any ('agentops', 'test-agentops')"
+        "\n   or name startswith 'agentops.'"
+        "\n   or isnotempty(tostring(customDimensions['agentops.eval.dataset']))"
+        "\n   or isnotempty(tostring(customDimensions['agentops.eval.cloud.eval_id']))"
+        "\n| project timestamp, itemType='agentops_request', name, target='', duration, success, resultCode, operation_Id, cloud_RoleName;"
+        "\nlet azure_ai_dependencies = dependencies"
+        "\n| where timestamp > ago(lookback)"
+        "\n| where target has_any ('openai.azure.com', 'cognitiveservices.azure.com', 'services.ai.azure.com', 'inference.ai.azure.com')"
+        "\n   or name has_any ('chat/completions', 'responses', 'embeddings', 'OpenAI', 'Azure AI', 'Foundry')"
+        "\n   or tostring(customDimensions['gen_ai.system']) has_any ('openai', 'az.ai.openai')"
+        "\n   or tostring(customDimensions['server.address']) has_any ('openai.azure.com', 'cognitiveservices.azure.com', 'services.ai.azure.com', 'inference.ai.azure.com')"
+        "\n   or tostring(customDimensions['http.url']) has_any ('openai.azure.com', 'cognitiveservices.azure.com', 'services.ai.azure.com', 'inference.ai.azure.com')"
+        "\n| project timestamp, itemType='azure_ai_dependency', name, target, duration, success, resultCode, operation_Id, cloud_RoleName;"
+        "\nunion agentops_requests, azure_ai_dependencies"
         "\n| order by timestamp desc"
         "\n| take 100"
     )
+    return _appinsights_logs_url(app_id, query)
+
+
+def _appinsights_doctor_findings_portal_url(connection_string: Optional[str]) -> Optional[str]:
+    """Build a Logs blade link focused on AgentOps Doctor finding spans."""
+    if not connection_string:
+        return None
+    m = re.search(r"ApplicationId=([0-9a-fA-F-]+)", connection_string)
+    if not m:
+        return None
+    app_id = m.group(1)
+    query = (
+        "let lookback = 24h;"
+        "\ndependencies"
+        "\n| where timestamp > ago(lookback)"
+        "\n| where name startswith 'doctor finding '"
+        "\n| project timestamp,"
+        "\n    severity=tostring(customDimensions['agentops.agent.finding.severity']),"
+        "\n    category=tostring(customDimensions['agentops.agent.finding.category']),"
+        "\n    finding_id=tostring(customDimensions['agentops.agent.finding.id']),"
+        "\n    title=tostring(customDimensions['agentops.agent.finding.title']),"
+        "\n    recommendation=tostring(customDimensions['agentops.agent.finding.recommendation']),"
+        "\n    source=tostring(customDimensions['agentops.agent.finding.source']),"
+        "\n    operation_Id,"
+        "\n    cloud_RoleName"
+        "\n| top 50 by timestamp desc"
+    )
+    return _appinsights_logs_url(app_id, query)
+
+
+def _appinsights_eval_runs_portal_url(connection_string: Optional[str]) -> Optional[str]:
+    """Build a Logs blade link focused on AgentOps eval run spans."""
+    if not connection_string:
+        return None
+    m = re.search(r"ApplicationId=([0-9a-fA-F-]+)", connection_string)
+    if not m:
+        return None
+    app_id = m.group(1)
+    query = (
+        "let lookback = 24h;"
+        "\nrequests"
+        "\n| where timestamp > ago(lookback)"
+        "\n| where name startswith 'RUN '"
+        "\n   or operation_Name startswith 'RUN '"
+        "\n| project timestamp,"
+        "\n    result=tostring(customDimensions['cicd.pipeline.result']),"
+        "\n    dataset=tostring(customDimensions['agentops.eval.dataset']),"
+        "\n    target=tostring(customDimensions['agentops.eval.target']),"
+        "\n    backend=tostring(customDimensions['agentops.eval.backend']),"
+        "\n    pass_rate=todouble(customDimensions['agentops.eval.pass_rate']),"
+        "\n    items_total=toint(customDimensions['agentops.eval.items_total']),"
+        "\n    items_passed=toint(customDimensions['agentops.eval.items_passed']),"
+        "\n    cloud_eval_id=tostring(customDimensions['agentops.eval.cloud.eval_id']),"
+        "\n    cloud_run_id=tostring(customDimensions['agentops.eval.cloud.run_id']),"
+        "\n    report_url=tostring(customDimensions['agentops.eval.cloud.report_url']),"
+        "\n    operation_Id,"
+        "\n    cloud_RoleName"
+        "\n| top 50 by timestamp desc"
+    )
+    return _appinsights_logs_url(app_id, query)
+
+
+def _appinsights_logs_url(app_id: str, query: str) -> str:
     # The portal accepts an `appId` query param shortcut.
     return (
         "https://portal.azure.com/#blade/Microsoft_OperationsManagementSuite_Workspace/"
@@ -1632,7 +1766,7 @@ def _build_foundry_connection(
             "detail": telemetry_detail,
             "hint": telemetry_hint,
             "link": telemetry.get("portal_url"),
-            "link_label": "View in App Insights",
+            "link_label": "Open App Insights",
         },
     ]
     return {
@@ -1693,10 +1827,7 @@ def _build_open_in_foundry(
         {
             "key": "datasets",
             "title": "Datasets",
-            "description": (
-                "Versioned eval datasets and lineage from trace to "
-                "deployment."
-            ),
+            "description": _foundry_dataset_description(workspace),
             "url": deeplinks.get("datasets") or project_url,
         },
         {
@@ -1766,13 +1897,14 @@ def _build_readiness_checklist(
     tracing_ok = bool(telemetry.get("enabled"))
     checks.append(
         {
-            "title": "Server-side tracing (agent &rarr; App Insights)",
+            "title": "Server-side tracing (agent → App Insights)",
             "status": "ok" if tracing_ok else "warn",
             "detail": (
                 telemetry.get("detail", "")
                 if tracing_ok
-                else "Wire <code>APPLICATIONINSIGHTS_CONNECTION_STRING</code> or "
-                "attach App Insights to the Foundry project. "
+                else "<strong>How to complete:</strong> wire "
+                "<code>APPLICATIONINSIGHTS_CONNECTION_STRING</code> or attach "
+                "App Insights to the Foundry project. "
                 '<a href="https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup" '
                 'target="_blank" rel="noopener noreferrer">Docs &#x2197;</a>'
             ),
@@ -1790,11 +1922,16 @@ def _build_readiness_checklist(
             "title": "Client-side tracing (app code instrumented)",
             "status": "info" if client_side_ok else "muted",
             "detail": (
-                "Instrument outbound model / agent calls in your client "
-                "app with OpenTelemetry so end-to-end traces flow into "
-                "the same App Insights workspace. "
-                '<a href="https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-client-side" '
-                'target="_blank" rel="noopener noreferrer">Docs &#x2197;</a>'
+                "<strong>How to complete:</strong> instrument the application "
+                "that calls your agent, not just AgentOps. Add Azure Monitor "
+                "OpenTelemetry to the app process, configure the same "
+                "<code>APPLICATIONINSIGHTS_CONNECTION_STRING</code>, and wrap "
+                "outbound model/agent/tool calls so a user request shows one "
+                "end-to-end trace across client code, agent execution, and "
+                "dependencies. Set <code>AGENTOPS_CLIENT_TRACING=1</code> only "
+                "after the app is instrumented. "
+                '<a href="https://learn.microsoft.com/azure/ai-foundry/observability/concepts/trace-agent-concept" '
+                'target="_blank" rel="noopener noreferrer">Foundry tracing docs &#x2197;</a>'
             ),
         }
     )
@@ -1821,9 +1958,39 @@ def _build_readiness_checklist(
             "detail": (
                 "Detected an AgentOps workflow that runs <code>agentops eval run</code>."
                 if cont_eval
-                else "Add a GitHub Actions workflow that runs "
-                "<code>agentops eval run</code> on PRs. Templates live under "
-                "<code>.github/workflows/agentops-*.yml</code>."
+                else "<strong>How to complete:</strong> run "
+                "<code>agentops workflow generate --kinds pr</code>, commit "
+                "the generated workflow under "
+                "<code>.github/workflows/agentops-*.yml</code>, and open a PR. "
+                '<a href="https://docs.github.com/actions/using-workflows" '
+                'target="_blank" rel="noopener noreferrer">Docs &#x2197;</a>'
+            ),
+        }
+    )
+
+    deploy_mode = _detect_deployment_workflow(workspace)
+    deploy_ok = deploy_mode in {"prompt-agent", "azd"}
+    checks.append(
+        {
+            "title": "CI/CD deploy stage",
+            "status": "ok" if deploy_ok else ("muted" if deploy_mode == "placeholder" else "warn"),
+            "detail": (
+                "Detected a prompt-agent deploy workflow: it stages a Foundry "
+                "candidate version from <code>prompt_file</code>, evaluates "
+                "that exact version, then records it as deployed when the gate passes."
+                if deploy_mode == "prompt-agent"
+                else "Detected an azd deploy workflow. AgentOps gates quality; "
+                "Azure Developer CLI owns provision/deploy through <code>azure.yaml</code>."
+                if deploy_mode == "azd"
+                else "Detected placeholder deploy steps. Replace them with "
+                "<code>--deploy-mode prompt-agent</code> for Foundry prompt agents "
+                "or <code>--deploy-mode azd</code> for app/infrastructure deployments."
+                if deploy_mode == "placeholder"
+                else "<strong>How to complete:</strong> generate deploy workflows with "
+                "<code>agentops workflow generate --kinds dev,qa,prod</code>. "
+                "Use <code>--deploy-mode prompt-agent</code> for the Quick Start "
+                "Foundry prompt-agent path, or <code>--deploy-mode azd</code> "
+                "when Azure Developer CLI owns the app deployment."
             ),
         }
     )
@@ -1836,8 +2003,13 @@ def _build_readiness_checklist(
             "detail": (
                 "Detected a cron-scheduled AgentOps workflow."
                 if scheduled
-                else "Add a <code>schedule:</code> trigger to the eval workflow "
-                "to catch silent regressions between PRs."
+                else "<strong>How to complete:</strong> create a scheduled "
+                "quality gate in CI. Add an <code>on.schedule</code> "
+                "cron trigger to an eval workflow that runs "
+                "<code>agentops eval run</code>. Commit the workflow so "
+                "AgentOps catches silent regressions even when no PR is open. "
+                '<a href="https://docs.github.com/actions/using-workflows/events-that-trigger-workflows#schedule" '
+                'target="_blank" rel="noopener noreferrer">GitHub schedule docs &#x2197;</a>'
             ),
         }
     )
@@ -1850,10 +2022,16 @@ def _build_readiness_checklist(
             "detail": (
                 "Detected a red-team bundle in <code>.agentops/bundles/</code>."
                 if redteam
-                else "Add a safety/red-team bundle (e.g. "
-                "<code>safe_agent_baseline.yaml</code>) and schedule it. "
-                "Foundry runs adversarial scans natively under "
-                "<strong>Observability &rarr; Red Teaming</strong>."
+                else "<strong>How to complete:</strong> add adversarial safety "
+                "coverage. In AgentOps, create a safety eval config that uses "
+                "a safety/red-team bundle such as "
+                "<code>safe_agent_baseline.yaml</code> and schedule it in CI. "
+                "In Foundry, also run the native red-team scan from "
+                "<strong>Observability &rarr; Red Teaming</strong>; use "
+                "AgentOps for repeatable repo/CI gates and Foundry for the "
+                "portal drilldown and managed adversarial scans. "
+                '<a href="https://learn.microsoft.com/azure/ai-foundry/concepts/observability" '
+                'target="_blank" rel="noopener noreferrer">Foundry observability docs &#x2197;</a>'
             ),
         }
     )
@@ -1864,11 +2042,25 @@ def _build_readiness_checklist(
             "title": "Alerts wired",
             "status": "info" if alerts else "muted",
             "detail": (
-                "Configure alerts in Azure Monitor / App Insights on the "
-                "<code>requests</code> table for the agent workload."
+                "App Insights is linked. Next, create Azure Monitor alert "
+                "rules for the agent workload: failures in "
+                "<code>requests</code>, slow P95 duration, high dependency "
+                "error rate, and optionally AgentOps CI/Doctor spans such as "
+                "<code>agentops.eval.*</code> and "
+                "<code>agentops.agent.finding.*</code>. "
+                '<a href="https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-create-new-alert-rule" '
+                'target="_blank" rel="noopener noreferrer">Alert docs &#x2197;</a>'
                 if alerts
-                else "Cockpit can't verify alerts locally. Configure them "
-                "in <strong>Azure Monitor &rarr; Alerts</strong> once tracing is wired."
+                else "<strong>How to complete:</strong> once tracing is wired, "
+                "create Azure Monitor / App Insights alert rules for the "
+                "agent workload. Start with <code>requests | where success == false</code> "
+                "for failures, P95 request duration for latency, and "
+                "<code>dependencies</code> failures for downstream services. "
+                "If you want AgentOps signals in alerts too, add rules over "
+                "<code>agentops.eval.*</code> and "
+                "<code>agentops.agent.finding.*</code> custom dimensions. "
+                '<a href="https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-create-new-alert-rule" '
+                'target="_blank" rel="noopener noreferrer">Alert docs &#x2197;</a>'
             ),
         }
     )
@@ -1897,9 +2089,10 @@ def _continuous_eval_status_from_watchdog(
     if not watchdog or not watchdog.get("has_history"):
         return (
             "muted",
-            "Run <code>agentops doctor</code> so the cockpit can read the "
-            "Foundry control plane and report whether continuous "
-            "evaluation rules are attached to your agents.",
+            "<strong>How to complete:</strong> run "
+            "<code>agentops doctor</code> so the cockpit can read the "
+            "Foundry control plane and report whether continuous-evaluation "
+            "rules are attached to your agents.",
         )
 
     findings = watchdog.get("latest_findings") or []
@@ -1916,17 +2109,30 @@ def _continuous_eval_status_from_watchdog(
         return (
             "warn",
             "Foundry lists agent(s) but no continuous-evaluation rules. "
-            "Production responses are not being scored on quality / "
-            "safety. Attach rules in "
-            "<strong>Foundry &rarr; Operate &rarr; Evaluations</strong>.",
+            "<strong>How to complete:</strong> open the Foundry project, go to "
+            "<strong>Operate &rarr; Evaluations</strong>, create a continuous "
+            "evaluation rule for the production agent, choose the evaluators "
+            "to run on sampled production responses (quality and safety), "
+            "select the App Insights-connected data source, save/enable the "
+            "rule, then re-run <code>agentops doctor</code>. "
+            '<a href="https://learn.microsoft.com/azure/ai-foundry/observability/'
+            'how-to/how-to-monitor-agents-dash'
+            'board" '
+            'target="_blank" rel="noopener noreferrer">Foundry monitor docs &#x2197;</a>',
         )
     if disabled:
         return (
             "warn",
             "One or more continuous-evaluation rules are disabled in "
-            "Foundry. Re-enable them in "
-            "<strong>Foundry &rarr; Operate &rarr; Evaluations</strong> so "
-            "production responses keep being scored.",
+            "Foundry. <strong>How to complete:</strong> open "
+            "<strong>Foundry &rarr; Operate &rarr; Evaluations</strong>, find "
+            "the disabled rule for this agent, confirm the evaluator/model "
+            "deployment and App Insights connection are still valid, enable "
+            "the rule, then re-run <code>agentops doctor</code>. "
+            '<a href="https://learn.microsoft.com/azure/ai-foundry/observability/'
+            'how-to/how-to-monitor-agents-dash'
+            'board" '
+            'target="_blank" rel="noopener noreferrer">Foundry monitor docs &#x2197;</a>',
         )
     return (
         "ok",
@@ -1964,7 +2170,7 @@ def _build_next_actions(
         )
 
     readiness_checks = readiness.get("checks", [])
-    if any(c["status"] == "warn" for c in readiness_checks if c["title"].startswith("Continuous")):
+    if any(c["status"] == "warn" for c in readiness_checks if c["title"].startswith("CI eval gate")):
         actions.append(
             {
                 "title": "Add a CI eval workflow",
@@ -2143,6 +2349,30 @@ def _detect_scheduled_eval(workspace: Path) -> bool:
         if "agentops eval" in text and "schedule:" in text:
             return True
     return False
+
+
+def _detect_deployment_workflow(workspace: Path) -> Optional[str]:
+    """Return the generated deploy mode detected in local CI/CD workflow files."""
+    candidates = [
+        workspace / ".github" / "workflows",
+        workspace / ".azuredevops" / "pipelines",
+    ]
+    detected_placeholder = False
+    for workflows in candidates:
+        if not workflows.is_dir():
+            continue
+        for entry in workflows.glob("agentops-deploy-*.y*ml"):
+            try:
+                text = entry.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "agentops:deploy-mode=prompt-agent" in text:
+                return "prompt-agent"
+            if "agentops:deploy-mode=azd" in text or "azd deploy --no-prompt" in text:
+                return "azd"
+            if "Build (placeholder)" in text or "Deploy (placeholder)" in text:
+                detected_placeholder = True
+    return "placeholder" if detected_placeholder else None
 
 
 def _detect_redteam_config(workspace: Path) -> bool:
@@ -2366,7 +2596,7 @@ def _render_telemetry_card(telemetry: Dict[str, Any]) -> str:
         link_html = (
             f'<a class="card-link" href="{telemetry["portal_url"]}" '
             f'target="_blank" rel="noopener noreferrer">'
-            f'View in App Insights →</a>'
+            f'Open App Insights KQL →</a>'
         )
 
     source_html = ""
@@ -2416,7 +2646,7 @@ def render_production_grid_html(production: Dict[str, Any]) -> str:
         label = (
             "No invocations in the selected window"
             if is_zero_invocations
-            else "Production preview unavailable"
+            else "Production signal unavailable"
         )
         if not reason:
             reason = (
@@ -2650,8 +2880,9 @@ def _render_finding_card(f: Dict[str, Any]) -> str:
     )
 
     rec_html = (
-        f'<div class="finding-recommendation"><strong>Fix:</strong> '
-        f'{_html_escape(rec)}</div>' if rec else ""
+        '<div class="finding-recommendation">'
+        '<strong class="recommendation-label">Fix:</strong> '
+        f'{_render_recommendation_body(rec)}</div>' if rec else ""
     )
     source_html = (
         f'<div class="finding-source">Source: {_html_escape(source)}</div>'
@@ -2711,6 +2942,60 @@ def _render_suggested_fix_panel(
         f'<ol class="fix-list">{items}</ol>'
         '</div>'
         '</details>'
+    )
+
+
+def _render_recommendation_body(text: str) -> str:
+    """Render safe, small markdown used by LLM-generated recommendations."""
+    parts = _split_markdown_bullets(text)
+    if len(parts) <= 1:
+        return _render_inline_recommendation_markdown(text)
+
+    intro = _render_inline_recommendation_markdown(parts[0])
+    items = "".join(
+        f'<li>{_render_inline_recommendation_markdown(item)}</li>'
+        for item in parts[1:]
+        if item
+    )
+    if not items:
+        return intro
+    return (
+        f'<span class="recommendation-intro">{intro}</span>'
+        f'<ul class="recommendation-list">{items}</ul>'
+    )
+
+
+def _split_markdown_bullets(text: str) -> List[str]:
+    normalized = re.sub(r"\r\n?", "\n", text.strip())
+    if "\n" in normalized:
+        parts: List[str] = []
+        current_intro: List[str] = []
+        bullets: List[str] = []
+        for line in normalized.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith(("- ", "* ")):
+                bullets.append(stripped[2:].strip())
+            elif bullets:
+                bullets[-1] = f"{bullets[-1]} {stripped}"
+            else:
+                current_intro.append(stripped)
+        if bullets:
+            parts.append(" ".join(current_intro).strip())
+            parts.extend(bullets)
+            return [part for part in parts if part]
+
+    inline_parts = [part.strip() for part in re.split(r"\s+-\s+", normalized) if part.strip()]
+    return inline_parts if len(inline_parts) > 1 else [normalized]
+
+
+def _render_inline_recommendation_markdown(text: str) -> str:
+    escaped = _html_escape(text)
+    return re.sub(
+        r"\*\*(.+?)\*\*",
+        r'<strong class="recommendation-mark">\1</strong>',
+        escaped,
     )
 
 
@@ -2896,7 +3181,9 @@ def _render_open_in_foundry_section(open_panel: Dict[str, Any]) -> str:
 def _render_readiness_section(readiness: Dict[str, Any]) -> str:
     rows: List[str] = []
     for check in readiness.get("checks", []):
-        dot = _status_dot(check.get("status", "muted"))
+        # The readiness headline counts only status=="ok" as ready. Keep the
+        # checklist dots equally simple: green means ready; gray means not yet.
+        dot = _status_dot("ok" if check.get("status") == "ok" else "muted")
         title = _html_escape(check.get("title", ""))
         detail = check.get("detail", "")
         rows.append(
@@ -3112,24 +3399,42 @@ def render_cockpit_html(payload: Dict[str, Any]) -> str:
     telemetry = payload["telemetry"]
     # Show the telemetry card only when telemetry is OFF - it then acts as
     # the "why is the production section empty" hint. When telemetry is
-    # active, the dedicated Production preview section communicates the
+    # active, the dedicated Production signal section communicates the
     # connection state already.
     show_telemetry_card = not telemetry.get("enabled", False)
     telemetry_card = _render_telemetry_card(telemetry) if show_telemetry_card else ""
+    eval_runs_url = (
+        telemetry.get("eval_runs_url") if isinstance(telemetry, dict) else None
+    )
+    eval_link = ""
+    if eval_runs_url:
+        eval_link = (
+            f' <a class="section-link" href="{_html_escape(eval_runs_url)}" '
+            f'target="_blank" rel="noopener noreferrer">'
+            f'View CI evals in App Insights →</a>'
+        )
 
     eval_section = ""
+    eval_caption = (
+        '<div class="section-subcaption">'
+        'AgentOps gate history from local artifacts and CI runs. For '
+        '<strong>Foundry cloud</strong> runs, use this as the quick pass/fail '
+        'triage view and open Foundry Evaluations for full analysis.'
+        '</div>'
+    )
     if payload["eval"]["has_runs"]:
         cards_html = "".join(_render_card(c) for c in payload["eval"]["cards"])
         exec_tag = _render_exec_section_tag(
             payload["eval"].get("latest_execution"),
         )
-        eval_body = f'<div class="grid">{cards_html}{telemetry_card}</div>'
+        eval_body = f'{eval_caption}<div class="grid">{cards_html}{telemetry_card}</div>'
         eval_section = _collapsible_section(
-            f"Eval runs{exec_tag}", eval_body,
+            f"Eval gate summary{exec_tag}{eval_link}", eval_body,
             section_id="section-eval-runs",
         )
     else:
         eval_body = (
+            eval_caption +
             '<div class="empty-state">'
             "No eval runs yet under <code>.agentops/results/</code>. "
             "Run <code>agentops eval run</code> to populate this section."
@@ -3137,7 +3442,7 @@ def render_cockpit_html(payload: Dict[str, Any]) -> str:
             + (f'<div class="grid">{telemetry_card}</div>' if telemetry_card else "")
         )
         eval_section = _collapsible_section(
-            "Eval runs", eval_body,
+            f"Eval gate summary{eval_link}", eval_body,
             section_id="section-eval-runs",
         )
 
@@ -3161,14 +3466,30 @@ def render_cockpit_html(payload: Dict[str, Any]) -> str:
         exec_tag = _render_exec_section_tag(
             payload["eval"].get("latest_execution") if payload["eval"].get("has_runs") else None,
         )
-        metrics_body = f'<div class="grid">{metrics_html}</div>'
+        metrics_caption = (
+            '<div class="section-subcaption">'
+            'Quality gate trends computed from AgentOps result artifacts. '
+            'Keep this as a compact threshold/regression summary; detailed '
+            'cloud-evaluation drilldown belongs in Foundry Evaluations.'
+            '</div>'
+        )
+        metrics_body = f'{metrics_caption}<div class="grid">{metrics_html}</div>'
         metrics_section = _collapsible_section(
-            f"Quality metrics{exec_tag}", metrics_body,
+            f"Quality gate summary{exec_tag}", metrics_body,
             section_id="section-quality-metrics",
         )
 
     watchdog = payload["watchdog"]
     watchdog_title = "AgentOps Doctor"
+    doctor_findings_url = (
+        telemetry.get("doctor_findings_url") if isinstance(telemetry, dict) else None
+    )
+    if doctor_findings_url:
+        watchdog_title += (
+            f' <a class="section-link" href="{_html_escape(doctor_findings_url)}" '
+            f'target="_blank" rel="noopener noreferrer">'
+            f'View findings in App Insights →</a>'
+        )
 
     if watchdog["has_history"]:
         watchdog_headline = "".join(
@@ -3198,7 +3519,7 @@ def render_cockpit_html(payload: Dict[str, Any]) -> str:
         portal_link = (
             f' <a class="section-link" href="{_html_escape(portal_url)}" '
             f'target="_blank" rel="noopener noreferrer">'
-            f'View in App Insights →</a>'
+            f'Open App Insights KQL →</a>'
         )
 
     # Foundry Monitor is the system of record for runtime telemetry.
@@ -3217,11 +3538,11 @@ def render_cockpit_html(payload: Dict[str, Any]) -> str:
             f' <a class="section-link section-link-primary" '
             f'href="{_html_escape(foundry_monitor_url)}" '
             'target="_blank" rel="noopener noreferrer">'
-            'Open Foundry Monitor →</a>'
+            'Full view in Foundry Monitor →</a>'
         )
 
     prod_title = (
-        'Production preview'
+        'Production signal'
         ' <span class="live-pill">live · App Insights</span>'
         f'{foundry_monitor_link}'
         f'{portal_link}'
@@ -3232,9 +3553,10 @@ def render_cockpit_html(payload: Dict[str, Any]) -> str:
         prod_html = "".join(_render_card(c, hero=True) for c in production["cards"])
         prod_caption = (
             '<div class="section-subcaption">'
-            'Just enough signal to spot a problem. Open '
-            '<strong>Foundry Monitor</strong> for the full dashboard '
-            '(invocations, tokens, per-model breakdown).'
+            'Fast health snapshot from App Insights. Use '
+            '<strong>Foundry Monitor</strong> for the full production view '
+            '(invocations, tokens, per-model breakdown), or open '
+            '<strong>App Insights KQL</strong> for the exact raw telemetry query.'
             '</div>'
         )
         prod_body = f'{prod_caption}<div class="grid" id="production-grid">{prod_html}</div>'
@@ -3259,9 +3581,10 @@ def render_cockpit_html(payload: Dict[str, Any]) -> str:
         )
         prod_caption = (
             '<div class="section-subcaption">'
-            'Just enough signal to spot a problem. Open '
-            '<strong>Foundry Monitor</strong> for the full dashboard '
-            '(invocations, tokens, per-model breakdown).'
+            'Fast health snapshot from App Insights. Use '
+            '<strong>Foundry Monitor</strong> for the full production view '
+            '(invocations, tokens, per-model breakdown), or open '
+            '<strong>App Insights KQL</strong> for the exact raw telemetry query.'
             '</div>'
         )
         prod_body = (
@@ -3800,6 +4123,10 @@ _COCKPIT_TEMPLATE = """<!doctype html>
   .readiness-detail {{
     font-size: 12px; color: var(--text-dim); line-height: 1.5;
   }}
+  .readiness-detail a {{
+    color: var(--info); text-decoration: none; font-weight: 600;
+  }}
+  .readiness-detail a:hover {{ text-decoration: underline; }}
   .readiness-detail code {{
     background: rgba(255, 255, 255, 0.05);
     padding: 1px 6px; border-radius: 4px;
@@ -4190,7 +4517,20 @@ _COCKPIT_TEMPLATE = """<!doctype html>
     line-height: 1.5;
     color: var(--text);
   }}
-  .finding-recommendation strong {{ color: var(--info); }}
+  .finding-recommendation .recommendation-label {{
+    color: var(--info);
+  }}
+  .finding-recommendation .recommendation-mark {{
+    color: var(--text);
+    font-weight: 700;
+  }}
+  .finding-recommendation .recommendation-list {{
+    margin: 6px 0 0 20px;
+    padding: 0;
+  }}
+  .finding-recommendation .recommendation-list li {{
+    margin: 2px 0;
+  }}
   .finding-source {{
     margin-top: 6px;
     font-size: 11px;
@@ -4409,7 +4749,7 @@ wireSparklineHover();
   }});
 }})();
 
-// Deferred load of the Production preview grid. The initial page render
+// Deferred load of the Production signal grid. The initial page render
 // skips the App Insights round-trip so the cockpit opens immediately;
 // this fetch fills in the slow part asynchronously without blocking.
 (function() {{

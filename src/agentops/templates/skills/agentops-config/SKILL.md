@@ -12,7 +12,9 @@ handful of fields - most projects need just `version`, `agent`, and
 ## Step 0 - Prerequisites
 
 1. `pip install "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@develop"` if `agentops` is missing.
-2. If `agentops.yaml` does not exist, run `agentops init` first. The init
+2. Run `agentops eval analyze` first. If it reports missing or ambiguous
+   target/dataset/scenario signals, use this skill to adapt the config.
+3. If `agentops.yaml` does not exist, run `agentops init` first. The init
    wizard already collects the agent reference and dataset path, so
    `agentops-config` is most useful when the user wants to **tweak** an
    existing config (add thresholds, switch to a different agent target,
@@ -76,6 +78,13 @@ execution: local
 publish: true
 # project_endpoint: "https://<resource>.services.ai.azure.com/api/projects/<p>"
 
+# Cloud dataset submission policy. The local JSONL remains the source of truth;
+# cloud runs sync it to Foundry Data/Datasets by default.
+dataset_sync:
+  mode: auto            # auto | foundry | inline
+  # name: agentops-smoke
+  # version: content-hash
+
 evaluators:           # rare - AgentOps auto-selects from agent + dataset
   - name: similarity
     threshold: ">=4"
@@ -93,3 +102,6 @@ clear error pointing at the offending key. Adjust and re-run.
 - Do **not** fabricate agent IDs, endpoint URLs, or model deployment
   names. Ask the user when uncertain.
 - Keep the file small. Auto-selection covers most metrics.
+- Keep local JSONL canonical. For cloud runs, prefer `dataset_sync.mode: auto`
+  so AgentOps keeps Foundry Data/Datasets in sync; use `inline` only for quick
+  experiments or environments without dataset upload permission.

@@ -60,8 +60,12 @@ F1Score, plus average latency.
 ## 4. Run
 
 ```powershell
+agentops eval analyze
 agentops eval run
 ```
+
+`eval analyze` verifies the model-direct target and dataset columns before
+`eval run` performs the deterministic evaluation.
 
 Outputs land in `.agentops/results/<timestamp>/` and are mirrored to `.agentops/results/latest/`:
 

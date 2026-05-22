@@ -54,12 +54,15 @@ stages:
                     scriptLocation: inlineScript
                     inlineScript: |
                       python -m pip install --upgrade pip
-                      python -m pip install "agentops-toolkit[foundry] @ git+https://github.com/Azure/agentops.git@develop"
+                      python -m pip install "agentops-toolkit[foundry,agent] @ git+https://github.com/Azure/agentops.git@develop"
                       agentops eval run --config "$(AGENTOPS_CONFIG)"
+                      agentops doctor --workspace . --out .agentops/agent/report.md \
+                        --severity-fail critical --evidence-pack
                   env:
                     AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: $(AZURE_AI_FOUNDRY_PROJECT_ENDPOINT)
                     AZURE_OPENAI_ENDPOINT: $(AZURE_OPENAI_ENDPOINT)
                     AZURE_OPENAI_DEPLOYMENT: $(AZURE_OPENAI_DEPLOYMENT)
+                    APPLICATIONINSIGHTS_CONNECTION_STRING: $(APPLICATIONINSIGHTS_CONNECTION_STRING)
 
                 - task: PublishPipelineArtifact@1
                   displayName: Upload AgentOps results
@@ -67,6 +70,14 @@ stages:
                   inputs:
                     targetPath: .agentops/results/latest
                     artifact: agentops-deploy-$(TARGET_ENVIRONMENT)-results
+                    publishLocation: pipeline
+
+                - task: PublishPipelineArtifact@1
+                  displayName: Upload AgentOps release evidence
+                  condition: always()
+                  inputs:
+                    targetPath: .agentops/release/latest
+                    artifact: agentops-deploy-$(TARGET_ENVIRONMENT)-release-evidence
                     publishLocation: pipeline
 
                 - bash: |

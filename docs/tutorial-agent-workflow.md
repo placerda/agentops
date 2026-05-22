@@ -232,9 +232,13 @@ messages should not call a business tool.
 ## 6. Run and inspect the eval
 
 ```powershell
+agentops eval analyze
 agentops eval run
 code .agentops/results/latest/report.md
 ```
+
+`eval analyze` should identify an agent-workflow scenario from
+`tool_definitions` / `tool_calls` before `eval run` executes the endpoint.
 
 The report should include:
 
@@ -250,6 +254,7 @@ argument, or response mapping mismatch.
 ## 7. Add a PR gate
 
 ```powershell
+agentops workflow analyze
 agentops workflow generate --kinds pr --force
 ```
 

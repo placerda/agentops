@@ -1,6 +1,6 @@
 ## Solution Overview
 
-AgentOps Toolkit is a CLI, local Cockpit, and agent skills that help teams operationalize AI agents on Microsoft Foundry with standardized evaluation, observability, tracing, and operational practices.
+AgentOps Toolkit is a CLI, local Cockpit, and agent skills that help teams move Microsoft Foundry agents from demo/POC to production with standardized evaluation, CI/CD gates, readiness diagnostics, release evidence, and trace-driven regression loops.
 
 The repository provides:
 - A single flat `agentops.yaml` configuration file at the project root
@@ -8,9 +8,13 @@ The repository provides:
   azd-compatible `.azure/<env>/.env` environment
 - Native Foundry execution with cloud (OpenAI Evals API) and local fallback
 - A normalized output contract (`results.json`, `report.md`) for CI and PRs
+- A release evidence contract (`evidence.json`, `evidence.md`) for production promotion reviews
 - A local Cockpit (`agentops cockpit`) that links out to Foundry for runtime
   observability and surfaces Doctor findings AgentOps owns end-to-end
 - A Doctor (`agentops doctor`) for readiness, regression, and OpEx checks
+- AI Landing Zone deployment readiness checks that connect official preflight,
+  azd/Bicep workflow deployment, AgentOps eval gates, and private-network runner
+  planning
 - Coding-agent skills (Copilot, Claude Code) installed alongside the workspace
 
 Primary capabilities:
@@ -20,6 +24,11 @@ Primary capabilities:
 - Produce machine-readable `results.json` and human-readable `report.md`
 - Enforce CI-friendly exit codes for threshold gating
 - Publish results to the New Foundry (cloud) or Classic Foundry (local) panels
+- Generate azd-first CI/CD workflows that run the official AI Landing Zone
+  preflight when present, then provision/deploy through azd and validate with
+  Doctor/eval gates
+- Promote reviewed production trace exports into regression dataset candidates
+  so runtime learnings become future eval gates
 
 Public CLI contract:
 - `agentops --version`
@@ -27,12 +36,15 @@ Public CLI contract:
 - `agentops init [--force] [--dir PATH] [--no-prompt] [--no-appinsights] [--azd-env NAME] [--project-endpoint URL] [--agent REF] [--dataset PATH] [--appinsights-connection-string STR]`
 - `agentops init show [--dir PATH] [--reveal-secrets]`
 - `agentops init explain [--no-pager] [--format text|markdown|html] [--out PATH] [--open]`
+- `agentops eval analyze [--dir PATH] [--format text|markdown|json] [--out PATH]`
 - `agentops eval run [--config PATH] [--baseline PATH] [--output DIR]`
+- `agentops eval promote-traces --source PATH [--out PATH] [--max-rows N] [--label-mode self-similarity|pending] [--apply]`
 - `agentops report generate [--in PATH] [--out PATH]`
-- `agentops workflow generate [--force] [--dir PATH] [--kinds pr,dev,qa,prod,watchdog] [--platform github|azure-devops] [--deploy-mode auto|placeholder|azd]`
+- `agentops workflow analyze [--dir PATH] [--format text|markdown|json] [--out PATH]`
+- `agentops workflow generate [--force] [--dir PATH] [--kinds pr,dev,qa,prod,watchdog] [--platform github|azure-devops] [--deploy-mode auto|placeholder|azd|prompt-agent]`
 - `agentops skills install [--platform copilot|claude] [--from SOURCE] [--prompt] [--force] [--dir PATH]`
 - `agentops mcp serve`
-- `agentops doctor [--workspace PATH] [--config PATH] [--out PATH] [--lookback-days N] [--severity-fail SEVERITY]`
+- `agentops doctor [--workspace PATH] [--config PATH] [--out PATH] [--lookback-days N] [--severity-fail SEVERITY] [--evidence-pack] [--evidence-out PATH]`
 - `agentops doctor explain [--no-pager] [--format text|markdown|html] [--out PATH] [--open]`
 - `agentops cockpit [--host HOST] [--port PORT] [--workspace PATH] [--no-preflight]`
 - `agentops agent serve [--host HOST] [--port PORT] [--config PATH] [--no-verify] [--workers N]`
@@ -112,17 +124,20 @@ src/
     │                                   #  agent serve, explain)
     │
     ├── core/
-    │   ├── agentops_config.py         # Flat 1.0 `agentops.yaml` Pydantic model
-    │   ├── config_loader.py           # YAML → model loading and validation
-    │   ├── evaluators.py              # Evaluator auto-selection rules
-    │   └── results.py                 # `results.json` schema and helpers
+│   ├── agentops_config.py         # Flat 1.0 `agentops.yaml` Pydantic model
+│   ├── config_loader.py           # YAML → model loading and validation
+│   ├── evaluators.py              # Evaluator auto-selection rules
+│   ├── release_evidence.py        # Stable release evidence schema
+│   └── results.py                 # `results.json` schema and helpers
     │
     ├── services/
     │   ├── initializer.py             # `agentops.yaml` + `.agentops/` scaffolding
     │   ├── setup_wizard.py            # azd-style interactive wizard (init flow)
     │   ├── preflight.py               # Pre-flight checks shared by doctor / cockpit
     │   ├── skills.py                  # Coding agent skill installation
-    │   └── cicd.py                    # GitHub Actions / Azure DevOps templates
+│   ├── cicd.py                    # GitHub Actions / Azure DevOps templates
+│   ├── evidence_pack.py           # `doctor --evidence-pack` writer
+│   └── trace_promotion.py         # Trace export → reviewable dataset candidates
     │
     ├── pipeline/
     │   ├── runtime.py                 # Local-execution engine for one run
@@ -204,6 +219,7 @@ docs/
 ├── how-it-works.md                            # Architecture and request flow
 ├── tutorial-quickstart.md                     # 5-minute quickstart
 ├── tutorial-end-to-end.md                     # Full workflow (eval → doctor → cockpit)
+├── tutorial-production-readiness.md           # POC → production readiness workflow
 ├── tutorial-basic-foundry-agent.md            # Foundry prompt agent
 ├── tutorial-conversational-agent.md           # Conversational agent
 ├── tutorial-agent-workflow.md                 # Agent with tools
@@ -540,6 +556,7 @@ Most common local flow:
 ```bash
 python -m pip install -e .
 agentops init                          # scaffold + wizard + skills
+agentops eval analyze                  # inspect eval setup before first run
 agentops eval run                      # run evaluation
 agentops report generate               # regenerate report.md
 agentops doctor                        # readiness + risk + history

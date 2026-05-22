@@ -19,6 +19,7 @@ explicitly elevated. The companion time-based rules
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -52,6 +53,7 @@ def run_opex_workspace_check(workspace: Path) -> List[Finding]:
     findings.extend(_check_workflow_concurrency(workspace))
     findings.extend(_check_workflow_sha_pinning(workspace))
     findings.extend(_check_max_tokens_limit(workspace))
+    findings.extend(_check_ailz_readiness(workspace))
 
     return findings
 
@@ -640,3 +642,233 @@ def _check_max_tokens_limit(workspace: Path) -> List[Finding]:
             },
         )
     ]
+
+
+def _check_ailz_readiness(workspace: Path) -> List[Finding]:
+    """Summarize AI Landing Zone deployment readiness from local files only.
+
+    This check intentionally does not call az, azd, Azure, or Foundry. It
+    activates only on canonical AI Landing Zone signals so generic azd projects
+    do not receive landing-zone-specific findings.
+    """
+
+    signals = _ailz_signals(workspace)
+    if not signals:
+        return []
+
+    preflight_script = workspace / "scripts" / "Invoke-PreflightChecks.ps1"
+    has_preflight_script = preflight_script.exists()
+    has_agentops_config = (workspace / "agentops.yaml").exists()
+    workflow_files = _agentops_deploy_workflow_files(workspace)
+    workflow_text = "\n".join(_safe_read_text(path) for path in workflow_files)
+    has_azd_workflow = "azd provision" in workflow_text.lower()
+    has_preflight_workflow = "invoke-preflightchecks.ps1" in workflow_text.lower()
+    network_isolated = _ailz_network_isolation_detected(workspace)
+    runner_path_declared = (
+        not network_isolated
+        or _private_runner_path_declared(workflow_text)
+        or _private_runner_path_declared(_safe_read_text(workspace / "README.md"))
+    )
+    deployment_mode = _ailz_deployment_mode(workspace)
+
+    dimensions = {
+        "canonical_signals": signals,
+        "deployment_mode": deployment_mode,
+        "ailz_preflight_script": has_preflight_script,
+        "agentops_eval_config": has_agentops_config,
+        "azd_deploy_workflow": has_azd_workflow,
+        "ailz_preflight_in_workflow": has_preflight_workflow,
+        "network_isolation_detected": network_isolated,
+        "private_runner_path_declared": runner_path_declared,
+    }
+
+    findings = [
+        Finding(
+            id="opex.ailz_readiness",
+            severity=Severity.INFO,
+            category=Category.OPERATIONAL_EXCELLENCE,
+            title="AI Landing Zone deployment readiness detected",
+            summary=(
+                "This workspace has AI Landing Zone deployment signals. "
+                "AgentOps can help turn those signals into an actionable "
+                "path: landing-zone preflight, azd/Bicep provisioning, "
+                "Doctor checks, eval gates, and post-deploy evidence."
+            ),
+            recommendation=(
+                "Run `agentops workflow analyze` to review the deployment "
+                "path, then generate azd-based workflows once the readiness "
+                "dimensions in the evidence are intentionally set."
+            ),
+            source=SOURCE_NAME,
+            evidence=dimensions,
+        )
+    ]
+
+    gaps: List[str] = []
+    if not has_preflight_script:
+        gaps.append("AILZ preflight script is missing from scripts/Invoke-PreflightChecks.ps1")
+    if not has_agentops_config:
+        gaps.append("agentops.yaml is missing, so post-deploy eval validation is not configured")
+    if not has_azd_workflow:
+        gaps.append("no AgentOps azd deploy workflow was found")
+    elif not has_preflight_workflow and has_preflight_script:
+        gaps.append("AgentOps azd deploy workflow does not run the AILZ preflight script")
+    if network_isolated and not runner_path_declared:
+        gaps.append(
+            "network isolation is detected but the CI runner/private-network execution path is not declared"
+        )
+
+    if gaps:
+        findings.append(
+            Finding(
+                id="opex.ailz_gaps",
+                severity=Severity.WARNING,
+                category=Category.OPERATIONAL_EXCELLENCE,
+                title="AI Landing Zone deployment readiness needs attention",
+                summary=(
+                    "The project has AI Landing Zone signals, but one or "
+                    "more readiness dimensions are still missing before the "
+                    "pipeline can confidently provision and validate the "
+                    "workload."
+                ),
+                recommendation=(
+                    "Address the gaps listed in evidence. A common path is: "
+                    "`agentops init`, `agentops eval analyze`, "
+                    "`agentops workflow analyze`, then "
+                    "`agentops workflow generate --deploy-mode azd --force`. "
+                    "For hub-spoke or private-network rollout, use "
+                    "`/agentops-workflow` to adapt runner access explicitly."
+                ),
+                source=SOURCE_NAME,
+                evidence={"gaps": gaps, "readiness": dimensions},
+            )
+        )
+
+    return findings
+
+
+def _ailz_signals(workspace: Path) -> List[str]:
+    signals: List[str] = []
+
+    manifest = _safe_load_json(workspace / "manifest.json")
+    if isinstance(manifest, dict) and any(
+        key in manifest for key in ("ailz_tag", "ailz_version")
+    ):
+        signals.append("manifest.json pins AI Landing Zone version")
+
+    azure_yaml = _safe_load_yaml(workspace / "azure.yaml")
+    if isinstance(azure_yaml, dict):
+        metadata = azure_yaml.get("metadata")
+        template = ""
+        if isinstance(metadata, dict):
+            template = str(metadata.get("template") or "")
+        name = str(azure_yaml.get("name") or "")
+        if template == "azure-ai-lz" or name == "azure-ai-lz":
+            signals.append("azure.yaml identifies the azure-ai-lz template")
+        if _azure_yaml_invokes_ailz_preflight(azure_yaml):
+            signals.append("azure.yaml wires the AI Landing Zone preprovision hook")
+
+    if (workspace / "scripts" / "Invoke-PreflightChecks.ps1").exists():
+        signals.append("scripts/Invoke-PreflightChecks.ps1 is present")
+
+    return sorted(set(signals))
+
+
+def _safe_load_json(path: Path) -> Optional[dict]:
+    text = _safe_read_text(path)
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _safe_read_text(path: Path) -> str:
+    try:
+        if not path.exists() or path.stat().st_size > 200_000:
+            return ""
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+
+
+def _azure_yaml_invokes_ailz_preflight(data: dict) -> bool:
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    return "invoke-preflightchecks.ps1" in str(hooks).lower()
+
+
+def _ailz_deployment_mode(workspace: Path) -> str:
+    params = _safe_load_json(workspace / "main.parameters.json")
+    if not isinstance(params, dict):
+        params = _safe_load_json(workspace / "infra" / "main.parameters.json")
+    if isinstance(params, dict):
+        raw = (params.get("parameters") or {}).get("deploymentMode")
+        if isinstance(raw, dict) and raw.get("value"):
+            return str(raw["value"])
+    text = _safe_read_text(workspace / "README.md").lower()
+    if "ailz-integrated" in text or "hub-and-spoke" in text:
+        return "ailz-integrated"
+    if "standalone" in text and "ai landing zone" in text:
+        return "standalone"
+    return "unknown"
+
+
+def _ailz_network_isolation_detected(workspace: Path) -> bool:
+    candidates = [
+        workspace / "main.parameters.json",
+        workspace / "infra" / "main.parameters.json",
+        workspace / "main.bicep",
+        workspace / "infra" / "main.bicep",
+        workspace / "README.md",
+    ]
+    text = "\n".join(_safe_read_text(path) for path in candidates).lower()
+    return any(
+        term in text
+        for term in (
+            "network_isolation",
+            "networkisolation",
+            "privateendpoint",
+            "private endpoint",
+            "azurefirewall",
+            "azure firewall",
+            "bastion",
+            "jumpbox",
+            "acr_task_agent_pool",
+            "acr tasks",
+            "hubintegration",
+        )
+    )
+
+
+def _agentops_deploy_workflow_files(workspace: Path) -> List[Path]:
+    candidates: List[Path] = []
+    for root in (
+        workspace / ".github" / "workflows",
+        workspace / ".azuredevops" / "pipelines",
+    ):
+        if not root.is_dir():
+            continue
+        candidates.extend(sorted(root.glob("agentops-deploy-*.yml")))
+        candidates.extend(sorted(root.glob("agentops-deploy-*.yaml")))
+    return candidates
+
+
+def _private_runner_path_declared(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "self-hosted",
+            "private runner",
+            "private agent",
+            "jumpbox",
+            "acr tasks",
+            "acr_task",
+            "agent pool",
+            "agent-pool",
+        )
+    )

@@ -59,6 +59,9 @@ TargetKind = Literal[
 #:   New Foundry Evaluations panel as the primary record.
 ExecutionMode = Literal["local", "cloud"]
 
+#: How cloud evaluation submits local dataset rows to Foundry.
+DatasetSyncMode = Literal["auto", "inline", "foundry"]
+
 #: Internal-only literal kept for the publisher dispatch table. Derived from
 #: ``execution`` + ``publish`` via :meth:`AgentOpsConfig.publish_target`.
 PublishTarget = Literal["foundry", "foundry_cloud"]
@@ -148,6 +151,60 @@ class EvaluatorOverride(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Dataset sync configuration
+# ---------------------------------------------------------------------------
+
+
+class DatasetSyncConfig(BaseModel):
+    """Cloud-evaluation dataset submission policy.
+
+    AgentOps keeps the local JSONL file as the source of truth. This optional
+    block tells the cloud runner whether to submit the rows inline or require a
+    Foundry dataset reference once that path is validated for the Evals API.
+    """
+
+    mode: DatasetSyncMode = Field(
+        "auto",
+        description=(
+            "Dataset submission mode for execution: cloud. 'auto' uses the "
+            "safest supported mode, 'inline' forces file_content compatibility, "
+            "and 'foundry' requires a versioned Foundry dataset reference."
+        ),
+    )
+    name: Optional[str] = Field(
+        None,
+        description="Optional stable Foundry dataset name for synced cloud runs.",
+    )
+    version: str = Field(
+        "content-hash",
+        description=(
+            "Foundry dataset version. Use 'content-hash' to derive it from the "
+            "local JSONL contents, or provide an explicit version string."
+        ),
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("name")
+    @classmethod
+    def _name_non_empty(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("dataset_sync.name must be non-empty when provided")
+        return value
+
+    @field_validator("version")
+    @classmethod
+    def _version_non_empty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("dataset_sync.version must be non-empty")
+        return value
+
+
+# ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
 
@@ -185,6 +242,12 @@ class AgentOpsConfig(BaseModel):
         ``context``, ``tool_calls``, and ``tool_definitions`` drive evaluator
         auto-selection.
 
+    ``prompt_file``
+        Optional source-controlled instructions file for Foundry prompt-agent
+        CI/CD. Deployment workflows create a candidate Foundry agent version
+        from this file, evaluate that exact version, then mark it as deployed
+        only when the gate passes.
+
     ``thresholds``
         Optional dict of metric name → criteria expression. When omitted, the
         evaluator catalog provides sensible defaults per metric.
@@ -206,11 +269,23 @@ class AgentOpsConfig(BaseModel):
     ``evaluators``
         Optional escape hatch: explicit list of evaluator names that overrides
         the auto-selection rules. Most users should leave this unset.
+
+    ``dataset_sync``
+        Optional cloud-evaluation dataset submission policy. The local JSONL
+        remains the source of truth; this block controls whether cloud evals
+        use inline compatibility or require a Foundry dataset reference.
     """
 
     version: int = Field(..., description="Schema version. Must be 1.")
     agent: str = Field(..., description="Target identifier (name:version, URL, or model:deployment)")
     dataset: Path = Field(..., description="Path to a JSONL dataset file")
+    prompt_file: Optional[Path] = Field(
+        None,
+        description=(
+            "Optional source-controlled prompt/instructions file used by "
+            "prompt-agent CI/CD deployment workflows."
+        ),
+    )
 
     thresholds: Dict[str, Any] = Field(
         default_factory=dict,
@@ -259,6 +334,10 @@ class AgentOpsConfig(BaseModel):
             "invocation and publishing. When omitted, AgentOps reads "
             "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT."
         ),
+    )
+    dataset_sync: DatasetSyncConfig = Field(
+        default_factory=DatasetSyncConfig,
+        description="Cloud evaluation dataset submission policy.",
     )
 
     model_config = ConfigDict(extra="forbid")

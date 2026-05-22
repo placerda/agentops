@@ -71,6 +71,120 @@ DEFAULT_REPORT_INPUT = Path(".agentops/results/latest/results.json")
 DOCTOR_EXPLAIN_WRAP_WIDTH = 88
 
 
+def _cli_heading(text: str) -> str:
+    return style(text, "bold", "cyan")
+
+
+def _cli_label(text: str) -> str:
+    return style(text, "bold", "cyan")
+
+
+def _cli_path(path: Path | str) -> str:
+    return style(str(path), "cyan")
+
+
+def _cli_command(command: str) -> str:
+    return style(command, "bold")
+
+
+def _cli_ok(text: str) -> str:
+    return style(text, "green")
+
+
+def _cli_warn(text: str) -> str:
+    return style(text, "yellow")
+
+
+def _cli_error(text: str) -> str:
+    return style(text, "red")
+
+
+def _cli_created(path: Path | str) -> str:
+    return f" {_cli_ok('+')} {_cli_ok('created')} {_cli_path(path)}"
+
+
+def _cli_updated(path: Path | str) -> str:
+    return f" {_cli_ok('✓')} {_cli_ok('updated')} {_cli_path(path)}"
+
+
+def _cli_overwritten(path: Path | str) -> str:
+    return f" {_cli_warn('~')} {_cli_warn('overwritten')} {_cli_path(path)}"
+
+
+def _cli_skipped(path: Path | str, suffix: str = "") -> str:
+    return f" {style('-', 'dim')} {style('skipped', 'dim')} {_cli_path(path)}{suffix}"
+
+
+def _cli_value(text: str) -> str:
+    lowered = text.lower()
+    if lowered in {"ready", "no"} or lowered.startswith("low -") or "ready to run" in lowered:
+        return _cli_ok(text)
+    if lowered in {"invalid", "not_found", "missing", "missing_input_column"}:
+        return _cli_error(text)
+    if lowered.startswith("high -") or "needs skill" in lowered:
+        return _cli_warn(text)
+    if lowered.startswith("medium -") or lowered in {"yes", "unknown", "incomplete"}:
+        return _cli_warn(text)
+    if lowered in {"azd", "prompt-agent", "placeholder", "auto"} or "(auto default)" in lowered:
+        return style(text, "bold")
+    return text
+
+
+def _colorize_analysis_text(text: str) -> str:
+    """Apply restrained terminal color to text analysis output only."""
+    lines: list[str] = []
+    section = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            lines.append(line)
+            continue
+        if stripped in {
+            "AgentOps eval analysis",
+            "AgentOps trace-to-dataset preview",
+            "AgentOps workflow analysis",
+            "Detected signals:",
+            "Recommended skills:",
+            "Copilot handoff:",
+            "Recommended commands:",
+            "Pipeline stages:",
+            "Next steps:",
+            "Sample rows:",
+        }:
+            section = stripped.rstrip(":")
+            lines.append(_cli_heading(line))
+            continue
+        if stripped == "Warnings:":
+            section = "Warnings"
+            lines.append(_cli_warn(line))
+            continue
+        if stripped.startswith("- "):
+            bullet = style("-", "dim")
+            body = stripped[2:]
+            prefix = line[: len(line) - len(line.lstrip())]
+            if section == "Warnings":
+                body = _cli_warn(body)
+            elif section == "Recommended commands" and body.startswith("agentops "):
+                body = _cli_command(body)
+            elif section == "Recommended skills" and body.startswith("/"):
+                body = style(body, "bold", "cyan")
+            lines.append(f"{prefix}{bullet} {body}")
+            continue
+        if ": " in stripped:
+            label, value = stripped.split(": ", 1)
+            prefix = line[: len(line) - len(line.lstrip())]
+            if label == "Copilot skills installed" and value.lower() == "no":
+                rendered_value = _cli_warn(value)
+            elif label == "Skill-assisted setup" and value.lower() == "no":
+                rendered_value = _cli_ok(value)
+            else:
+                rendered_value = _cli_value(value)
+            lines.append(f"{prefix}{_cli_label(label)}: {rendered_value}")
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
 # Auto-load .agentops/.env at import time so downstream code (Foundry
 # discovery, telemetry, doctor checks) can rely on the values the user
 # captured via `agentops init` without having to `export` them in every
@@ -119,6 +233,12 @@ EXPLAIN_PAGES: dict[tuple[str, ...], ExplainPage] = {
             "The Cockpit brings your project, Foundry, and Azure Monitor "
             "together in a local browser view. Doctor adds a readiness "
             "analysis grouped by the Microsoft AI Well-Architected Framework.",
+            "AgentOps complements Foundry instead of replacing it: Foundry "
+            "is the system of record for hosted agents, cloud evaluations, "
+            "runtime traces, monitoring, red teaming, and operations; "
+            "AgentOps provides the repo-side CLI workflow, CI gates, "
+            "normalized artifacts, Doctor diagnostics, and deep links back "
+            "to the right Foundry or Azure Monitor surface.",
             "Use `--help` for the terse syntax. Use `explain` for the "
             "bigger picture — what each command does, what it reads, what "
             "it writes, and where it takes you.",
@@ -128,7 +248,7 @@ EXPLAIN_PAGES: dict[tuple[str, ...], ExplainPage] = {
             "`eval run` executes local or Foundry-backed evaluation workflows and writes stable `results.json` plus `report.md` artifacts.",
             "`doctor` collects local history, workspace configuration, Foundry control-plane metadata, Azure telemetry, and Azure resource posture, then emits actionable readiness findings grouped by WAF-AI pillar.",
             "`cockpit` opens a local browser cockpit: Foundry connection, one-click links to Foundry Monitor, Evaluations, Traces, Red Teaming, and App Insights, an observability readiness checklist, Doctor findings, local eval history, and recommended next actions.",
-            "`workflow generate`, `skills install`, `report generate`, and `mcp serve` wire the same workflow into CI, coding agents, reports, and MCP clients.",
+            "`workflow analyze`, `workflow generate`, `skills install`, `report generate`, and `mcp serve` wire the same workflow into CI, coding agents, reports, and MCP clients.",
         ),
         inputs=(
             "Command path after `explain`, for example `eval run`, `doctor`, or `cockpit`.",
@@ -232,11 +352,34 @@ EXPLAIN_PAGES: dict[tuple[str, ...], ExplainPage] = {
         command="agentops eval",
         synopsis=("agentops eval COMMAND [ARGS]...", "agentops eval explain"),
         summary=(
-            "Contains commands that execute standardized evaluation runs from AgentOps configuration.",
-            "The primary subcommand is `run`, which loads config, invokes the target, evaluates rows, and writes normalized outputs.",
+            "Contains commands that analyze and execute standardized evaluation runs from AgentOps configuration.",
+            "`analyze` is the read-only setup triage; `run` is the deterministic executor that loads config, invokes the target, evaluates rows, and writes normalized outputs. `promote-traces` turns reviewed production trace exports into regression dataset candidates.",
         ),
-        children=("run",),
-        examples=("agentops eval run --config agentops.yaml", "agentops explain eval run --open"),
+        children=("analyze", "run", "promote-traces"),
+        examples=("agentops eval analyze", "agentops eval run --config agentops.yaml", "agentops eval promote-traces --source traces.jsonl --apply", "agentops explain eval run --open"),
+    ),
+    ("eval", "analyze"): ExplainPage(
+        title="Analyze evaluation setup",
+        command="agentops eval analyze",
+        synopsis=("agentops eval analyze [--dir PATH] [--format text|markdown|json] [--out PATH]", "agentops eval analyze explain"),
+        summary=(
+            "Inspects the local repository and explains whether evaluation setup is ready for `agentops eval run`.",
+            "Use it after `agentops init` and before the first run, especially for copied accelerators or apps where target, dataset, or evaluator scenario is not obvious.",
+        ),
+        how_it_works=(
+            "Scans local files only; it does not call Azure, Foundry, Copilot, or any model.",
+            "Reads `agentops.yaml` when present, classifies the target kind, checks the dataset reference, and samples JSONL columns.",
+            "Looks for structural hints such as Foundry SDK usage, HTTP/containerized apps, RAG/retrieval code, tool calls, direct model APIs, and azd projects.",
+            "Reports a scenario hint and complexity level. If deterministic inference is not enough, it recommends the AgentOps skills to use with Copilot, such as `agentops-config`, `agentops-dataset`, and `agentops-eval`.",
+            "The boundary is intentional: `eval analyze` is read-only triage, `agentops init` writes the base config, `agentops eval run` executes a configured eval, and Doctor checks readiness after runs/config exist.",
+        ),
+        outputs=("Human-readable eval setup analysis or stable JSON with `version: 1`",),
+        examples=(
+            "agentops eval analyze",
+            "agentops eval analyze --format markdown --out agentops-eval-plan.md",
+            "agentops eval analyze --format json",
+        ),
+        see_also=("agentops explain eval run", "agentops explain workflow analyze", "agentops explain skills install"),
     ),
     ("eval", "run"): ExplainPage(
         title="Run evaluation",
@@ -258,6 +401,28 @@ EXPLAIN_PAGES: dict[tuple[str, ...], ExplainPage] = {
         outputs=("`results.json`", "`report.md`", "Optional latest mirror under `.agentops/results/latest/`"),
         examples=("agentops eval run", "agentops eval run -c agentops.yaml -o .agentops/results/manual"),
         see_also=("agentops explain report generate", "agentops explain cockpit"),
+    ),
+    ("eval", "promote-traces"): ExplainPage(
+        title="Promote traces into dataset candidates",
+        command="agentops eval promote-traces",
+        synopsis=("agentops eval promote-traces --source traces.jsonl [--out .agentops/data/trace-regression.jsonl] [--max-rows N] [--label-mode self-similarity|pending] [--apply]", "agentops eval promote-traces explain"),
+        summary=(
+            "Converts an exported Foundry/App Insights trace JSON or JSONL file into reviewable AgentOps regression dataset rows.",
+            "By default it only previews the candidate rows. Use `--apply` to write the dataset and provenance manifest under `.agentops/data/`.",
+        ),
+        how_it_works=(
+            "Reads local trace exports only; it does not query Azure or Foundry.",
+            "Extracts common input/response fields from each trace and writes AgentOps JSONL rows.",
+            "`--label-mode self-similarity` stores the production response as `expected` for drift detection; this is not human-verified truth.",
+            "`--label-mode pending` leaves expected values blank and marks rows for human labeling.",
+            "Writes `trace-regression-manifest.json` beside the dataset when `--apply` is used so Doctor and evidence packs can show trace-to-dataset readiness.",
+        ),
+        outputs=("Preview text by default", "JSONL dataset plus `trace-regression-manifest.json` when `--apply` is used"),
+        examples=(
+            "agentops eval promote-traces --source traces.jsonl",
+            "agentops eval promote-traces --source traces.jsonl --label-mode pending --apply",
+        ),
+        see_also=("agentops explain eval run", "agentops explain doctor"),
     ),
     ("report",): ExplainPage(
         title="Reporting commands",
@@ -288,26 +453,49 @@ EXPLAIN_PAGES: dict[tuple[str, ...], ExplainPage] = {
         title="Workflow commands",
         command="agentops workflow",
         synopsis=("agentops workflow COMMAND [ARGS]...", "agentops workflow explain"),
-        summary=("Contains commands that generate CI/CD workflow files for AgentOps evaluation gates and deployment stages.",),
-        children=("generate",),
+        summary=("Contains commands that analyze and generate CI/CD workflow files for AgentOps evaluation gates and deployment stages.",),
+        children=("analyze", "generate"),
+    ),
+    ("workflow", "analyze"): ExplainPage(
+        title="Analyze CI/CD workflow shape",
+        command="agentops workflow analyze",
+        synopsis=("agentops workflow analyze [--dir PATH] [--format text|markdown|json] [--out PATH]", "agentops workflow analyze explain"),
+        summary=(
+            "Inspects the local repository and recommends how AgentOps should fit into CI/CD without replacing Foundry, azd, or landing-zone deployment.",
+            "Use it before generating workflows for copied accelerators, azd projects, AI Landing Zone topologies, or repos with existing build/deploy pipelines.",
+        ),
+        how_it_works=(
+            "Scans local files only; it does not call Azure, Foundry, GitHub, Azure DevOps, or azd.",
+            "Treats structural signals such as `azure.yaml`, Bicep files, AgentOps prompt-agent config, landing-zone manifests, private-network terms, Dockerfiles, and existing CI folders as the main evidence.",
+            "Treats README accelerator matches as hints, not hard truth.",
+            "Returns the same deploy-mode recommendation used by `workflow generate --deploy-mode auto` so analysis and generation stay aligned.",
+            "Explains the recommended pipeline stages: AgentOps eval/Doctor gates, azd app/infra deployment when present, Foundry prompt-agent candidate deployment when applicable, or project-specific placeholders when adaptation is required.",
+        ),
+        outputs=("Human-readable workflow analysis or stable JSON with `version: 1`",),
+        examples=(
+            "agentops workflow analyze",
+            "agentops workflow analyze --format markdown --out agentops-workflow-plan.md",
+            "agentops workflow analyze --format json",
+        ),
+        see_also=("agentops explain workflow generate", "agentops explain doctor", "agentops explain cockpit"),
     ),
     ("workflow", "generate"): ExplainPage(
         title="Generate CI/CD workflows",
         command="agentops workflow generate",
-        synopsis=("agentops workflow generate [--force] [--dir PATH] [--kinds pr,dev,qa,prod,watchdog] [--platform github|azure-devops] [--deploy-mode auto|placeholder|azd]", "agentops workflow generate explain"),
+        synopsis=("agentops workflow generate [--force] [--dir PATH] [--kinds pr,dev,qa,prod,watchdog] [--platform github|azure-devops] [--deploy-mode auto|placeholder|azd|prompt-agent]", "agentops workflow generate explain"),
         summary=(
             "Writes CI/CD workflow templates that run AgentOps gates in pull requests and environment deployments.",
-            "Deployment is azd-first when the repo already has `azure.yaml`: generated deploy workflows call `azd provision` / `azd deploy` instead of asking AgentOps to own infrastructure. Repos without `azure.yaml` keep the stack-agnostic placeholder scaffold.",
+            "Deployment mode defaults to `auto`. Deployment is azd-first when the repo already has `azure.yaml`: generated deploy workflows call `azd provision` / `azd deploy` instead of asking AgentOps to own infrastructure. Repos without `azure.yaml` can use prompt-agent mode when `agentops.yaml` targets a Foundry prompt agent, or placeholders for custom stacks.",
         ),
         how_it_works=(
             "Selects the target platform and workflow kinds.",
-            "Auto-detects `azure.yaml` and picks azd deployment templates when present; otherwise uses placeholder deploy templates. Override with `--deploy-mode`.",
+            "When `--deploy-mode` is omitted, auto-detects `azure.yaml` first, then Foundry prompt-agent configs, and picks azd, prompt-agent, or placeholder deploy templates. Override with `--deploy-mode`.",
             "Copies packaged templates into `.github/workflows/` or `.azuredevops/pipelines/`.",
             "Skips existing files unless `--force` is set.",
             "Prints required identity, environment, and branch-protection next steps.",
         ),
         outputs=("CI/CD YAML workflow files",),
-        examples=("agentops workflow generate", "agentops workflow generate --kinds pr,dev --platform github --deploy-mode azd --force"),
+        examples=("agentops workflow generate", "agentops workflow generate --kinds pr,dev --platform github --deploy-mode prompt-agent --force"),
     ),
     ("skills",): ExplainPage(
         title="Coding agent skills",
@@ -383,8 +571,11 @@ EXPLAIN_PAGES: dict[tuple[str, ...], ExplainPage] = {
     ("doctor",): ExplainPage(
         title="Doctor diagnostics",
         command="agentops doctor",
-        synopsis=("agentops doctor [OPTIONS]", "agentops doctor explain [--format text|markdown|html] [--out PATH] [--open]"),
-        summary=("Runs the local diagnostic analyzer for AgentOps workspaces, Foundry, Azure telemetry, and WAF-AI gaps.",),
+        synopsis=("agentops doctor [OPTIONS] [--evidence-pack] [--evidence-out PATH]", "agentops doctor explain [--format text|markdown|html] [--out PATH] [--open]"),
+        summary=(
+            "Runs the local diagnostic analyzer for AgentOps workspaces, Foundry, Azure telemetry, and WAF-AI gaps.",
+            "With `--evidence-pack`, Doctor also writes a production-readiness evidence pack that summarizes eval, workflow, Foundry, monitoring, AI Landing Zone, and trace-regression signals for release review.",
+        ),
         see_also=("agentops doctor explain", "agentops explain cockpit"),
     ),
     ("cockpit",): ExplainPage(
@@ -413,7 +604,7 @@ EXPLAIN_PAGES: dict[tuple[str, ...], ExplainPage] = {
             "  3. Observability readiness — checklist for tracing connected, continuous evaluation, scheduled evaluation, red team scans, and alerts.",
             "  4. AgentOps Doctor — local findings, WAF-AI gaps, and repo/config/CI issues that Foundry does not surface.",
             "  5. Local eval history — latest `results.json`, PR-friendly reports, and CI gate status.",
-            "  6. Next actions — contextual recommendations such as Enable continuous eval, Open Foundry Monitor, or Fix missing App Insights.",
+            "  6. Next actions — contextual recommendations such as Enable continuous eval, Full view in Foundry Monitor, or Fix missing App Insights.",
             "Starts a localhost Uvicorn server and opens a browser tab; auto-refresh is configurable from the page and persists across reloads.",
         ),
         inputs=(
@@ -445,7 +636,9 @@ def _resolve_platforms(
 
     detected = detect_platforms(directory)
     if detected:
-        typer.echo(f"Detected coding agent platform(s): {', '.join(detected)}")
+        typer.echo(
+            f"{_cli_label('Detected coding agent platform(s)')}: {', '.join(detected)}"
+        )
         return detected
 
     if prompt:
@@ -462,20 +655,20 @@ def _print_skills_result(result: object) -> None:
     """Print skills installation summary."""
     platforms = getattr(result, "platforms", [])
     if platforms:
-        typer.echo(f"Skills platforms: {', '.join(platforms)}")
+        typer.echo(f"{_cli_label('Skills platforms')}: {', '.join(platforms)}")
     for created in result.created_files:  # type: ignore[attr-defined]
-        typer.echo(f" + created {created}")
+        typer.echo(_cli_created(created))
     for overwritten in result.overwritten_files:  # type: ignore[attr-defined]
-        typer.echo(f" ~ overwritten {overwritten}")
+        typer.echo(_cli_overwritten(overwritten))
     for skipped in result.skipped_files:  # type: ignore[attr-defined]
-        typer.echo(f" - skipped {skipped} (use --force to overwrite)")
+        typer.echo(_cli_skipped(skipped, " (use --force to overwrite)"))
 
 
 def _print_registration_result(result: object) -> None:
     """Print skill registration summary."""
     registered = getattr(result, "registered_files", [])
     for path in registered:
-        typer.echo(f" * registered skills in {path}")
+        typer.echo(f" {_cli_ok('*')} {_cli_ok('registered skills in')} {_cli_path(path)}")
 
 
 # ---------------------------------------------------------------------------
@@ -670,7 +863,10 @@ def _emit_manual_output(
 
     format_ = format_.lower()
     if format_ not in {"text", "markdown", "html"}:
-        typer.echo("Invalid --format. Use one of: text, markdown, html.", err=True)
+        typer.echo(
+            f"{_cli_error('Invalid --format')}. Use one of: text, markdown, html.",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     html = _build_explain_html(markdown, title=title)
@@ -678,7 +874,7 @@ def _emit_manual_output(
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(output, encoding="utf-8")
-        typer.echo(f"Wrote {out}")
+        typer.echo(f"{_cli_label('Wrote')}: {_cli_path(out)}")
 
     if open_browser:
         browser_path = out if out is not None and format_ == "html" else None
@@ -692,7 +888,7 @@ def _emit_manual_output(
             ) as temp:
                 temp.write(html)
                 browser_path = Path(temp.name)
-            typer.echo(f"Opened browser copy: {browser_path}")
+            typer.echo(f"{_cli_label('Opened browser copy')}: {_cli_path(browser_path)}")
         webbrowser.open(browser_path.resolve().as_uri())
 
     if out is not None or open_browser:
@@ -729,7 +925,7 @@ def _emit_registered_explain(
         text = _registered_explain_text(path)
         markdown = _build_registered_explain_markdown(path)
     except ValueError as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(f"{_cli_error('Error')}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     page = EXPLAIN_PAGES[path]
     _emit_manual_output(
@@ -750,7 +946,7 @@ def _maybe_explain_leaf(
     if explain is None:
         return False
     if explain.lower() != "explain":
-        typer.echo(f"Error: unexpected argument {explain!r}.", err=True)
+        typer.echo(f"{_cli_error('Error')}: unexpected argument {explain!r}.", err=True)
         raise typer.Exit(code=1)
     _emit_registered_explain(
         path,
@@ -962,6 +1158,10 @@ def cmd_init(
 
     from agentops.services.initializer import initialize_flat_workspace
     from agentops.services.setup_wizard import (
+        AGENT_TITLE,
+        APPINSIGHTS_TITLE,
+        DATASET_TITLE,
+        PROJECT_ENDPOINT_TITLE,
         WizardAnswers,
         apply_answers,
         discover_defaults,
@@ -982,7 +1182,8 @@ def cmd_init(
             workspace.mkdir(parents=True, exist_ok=True)
         except Exception as exc:  # noqa: BLE001
             typer.echo(
-                f"Error: could not create workspace directory {workspace}: {exc}",
+                f"{_cli_error('Error')}: could not create workspace directory "
+                f"{_cli_path(workspace)}: {exc}",
                 err=True,
             )
             raise typer.Exit(code=1) from exc
@@ -1018,16 +1219,19 @@ def cmd_init(
     try:
         result = initialize_flat_workspace(directory=workspace, force=force)
     except Exception as exc:
-        typer.echo(f"Error: failed to initialize workspace: {exc}", err=True)
+        typer.echo(
+            f"{_cli_error('Error')}: failed to initialize workspace: {exc}",
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
 
-    typer.echo("Initialized AgentOps workspace.")
+    typer.echo(_cli_ok("Initialized AgentOps workspace."))
     for created in result.created_files:
-        typer.echo(f" + created {created}")
+        typer.echo(_cli_created(created))
     for overwritten in result.overwritten_files:
-        typer.echo(f" ~ overwritten {overwritten}")
+        typer.echo(_cli_overwritten(overwritten))
     for skipped in result.skipped_files:
-        typer.echo(f" - skipped {skipped}")
+        typer.echo(_cli_skipped(skipped))
 
     # ----- Phase 2: ensure a .azure/<env>/ baseline exists ----------------
     target_env_name = azd_env_name or "dev"
@@ -1042,7 +1246,8 @@ def cmd_init(
             set_default_azd_env(workspace, azd_env_name)
         except Exception as exc:  # noqa: BLE001
             typer.echo(
-                f" ! could not prepare .azure/{azd_env_name}: {exc}",
+                f" {_cli_warn('!')} {_cli_warn('could not prepare')} "
+                f"{_cli_path(f'.azure/{azd_env_name}')}: {exc}",
                 err=True,
             )
             location = discover_azd_env(workspace)
@@ -1053,13 +1258,16 @@ def cmd_init(
             try:
                 location = ensure_azd_env(workspace, env_name)
                 typer.echo(
-                    f" + bootstrapped azd environment '{env_name}' at {location.env_path.parent}"
+                    f" {_cli_ok('+')} {_cli_ok('bootstrapped azd environment')} "
+                    f"'{env_name}' at {_cli_path(location.env_path.parent)}"
                     if location.env_path is not None
-                    else f" + bootstrapped azd environment '{env_name}'"
+                    else f" {_cli_ok('+')} {_cli_ok('bootstrapped azd environment')} "
+                    f"'{env_name}'"
                 )
             except Exception as exc:  # noqa: BLE001
                 typer.echo(
-                    f" ! could not bootstrap .azure/{env_name}: {exc}",
+                    f" {_cli_warn('!')} {_cli_warn('could not bootstrap')} "
+                    f"{_cli_path(f'.azure/{env_name}')}: {exc}",
                     err=True,
                 )
 
@@ -1079,17 +1287,17 @@ def cmd_init(
         if project_endpoint is not None:
             err = validate_project_endpoint(project_endpoint)
             if err:
-                typer.echo(f"Error: --project-endpoint: {err}", err=True)
+                typer.echo(f"{_cli_error('Error')}: --project-endpoint: {err}", err=True)
                 raise typer.Exit(code=1)
         if agent is not None:
             err = validate_agent(agent)
             if err:
-                typer.echo(f"Error: --agent: {err}", err=True)
+                typer.echo(f"{_cli_error('Error')}: --agent: {err}", err=True)
                 raise typer.Exit(code=1)
         if dataset is not None:
             err = validate_dataset(dataset, workspace)
             if err:
-                typer.echo(f"Error: --dataset: {err}", err=True)
+                typer.echo(f"{_cli_error('Error')}: --dataset: {err}", err=True)
                 raise typer.Exit(code=1)
         answers = WizardAnswers(
             project_endpoint=project_endpoint,
@@ -1103,15 +1311,16 @@ def cmd_init(
         # the interactive wizard cannot run. Print the next-step hints and
         # exit cleanly.
         typer.echo("")
-        typer.echo("Workspace ready. Next steps:")
-        typer.echo("  agentops init                      # interactive wizard to set endpoints")
-        typer.echo("  agentops init show                 # inspect the active configuration")
-        typer.echo("  agentops eval run                  # run an evaluation")
-        typer.echo("  agentops skills install            # install coding agent skills")
+        typer.echo(_cli_heading("Workspace ready. Next steps:"))
+        typer.echo(f"  {_cli_command('agentops init')}                      # interactive wizard to set endpoints")
+        typer.echo(f"  {_cli_command('agentops init show')}                 # inspect the active configuration")
+        typer.echo(f"  {_cli_command('agentops eval analyze')}              # inspect eval setup before running")
+        typer.echo(f"  {_cli_command('agentops eval run')}                  # run a configured evaluation")
+        typer.echo(f"  {_cli_command('agentops skills install')}            # install coding agent skills")
         if not no_prompt and not sys.stdin.isatty():
             typer.echo("")
             typer.echo(
-                "Tip: stdin is not a TTY, so the interactive wizard was skipped. "
+                f"{_cli_warn('Tip')}: stdin is not a TTY, so the interactive wizard was skipped. "
                 "Re-run with --project-endpoint, --agent, --dataset and/or "
                 "--appinsights-connection-string to script the configuration."
             )
@@ -1120,8 +1329,8 @@ def cmd_init(
         # Interactive mode — TTY confirmed.
         typer.echo("")
         unicode_ok = _terminal_unicode_enabled()
-        typer.echo("AgentOps configuration")
-        typer.echo("──────────────────────" if unicode_ok else "----------------------")
+        typer.echo(_cli_heading("AgentOps configuration"))
+        typer.echo(style("──────────────────────" if unicode_ok else "----------------------", "dim"))
 
         defaults = discover_defaults(workspace)
 
@@ -1137,7 +1346,7 @@ def cmd_init(
             )
         )
         if will_prompt:
-            typer.echo("Press Enter to accept the value in brackets.")
+            typer.echo(style("Press Enter to accept the value in brackets.", "dim"))
 
         def _prompt(question: str, default: Optional[str]) -> str:
             return typer.prompt(question, default=default or "", show_default=bool(default))
@@ -1145,6 +1354,12 @@ def cmd_init(
         # Incremental persistence: each answer is written as soon as the
         # wizard validates it, so Ctrl+C never throws away progress.
         bullet = "·" if unicode_ok else "-"
+        question_titles = {
+            PROJECT_ENDPOINT_TITLE,
+            AGENT_TITLE,
+            DATASET_TITLE,
+            APPINSIGHTS_TITLE,
+        }
 
         def _on_answer(field_name: str, value: str) -> None:
             partial = WizardAnswers(**{field_name: value})
@@ -1155,17 +1370,27 @@ def cmd_init(
                     default_env_name=target_env_name,
                 )
             except Exception as exc:  # noqa: BLE001
-                typer.echo(f"  ! could not persist {field_name}: {exc}", err=True)
+                typer.echo(
+                    f"  {_cli_warn('!')} {_cli_warn('could not persist')} "
+                    f"{field_name}: {exc}",
+                    err=True,
+                )
                 return
             if partial_result.yaml_updated and field_name in partial_result.yaml_fields:
-                typer.echo(f"  {bullet} saved to {partial_result.yaml_path}")
+                typer.echo(f"  {bullet} {_cli_ok('saved to')} {_cli_path(partial_result.yaml_path)}")
             if partial_result.env_updated and partial_result.env_path is not None:
-                typer.echo(f"  {bullet} saved to {partial_result.env_path}")
+                typer.echo(f"  {bullet} {_cli_ok('saved to')} {_cli_path(partial_result.env_path)}")
+
+        def _wizard_echo(msg: str) -> None:
+            if msg in question_titles:
+                typer.echo(style(msg, "bold", "cyan"))
+            else:
+                typer.echo(msg)
 
         answers = run_wizard(
             workspace,
             prompt=_prompt,
-            echo=lambda msg: typer.echo(msg),
+            echo=_wizard_echo,
             include_appinsights=not no_appinsights,
             on_answer=_on_answer,
             reconfigure=reconfigure,
@@ -1185,7 +1410,7 @@ def cmd_init(
             default_env_name=target_env_name,
         )
     except RuntimeError as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(f"{_cli_error('Error')}: {exc}", err=True)
         raise typer.Exit(code=1)
 
     typer.echo("")
@@ -1194,30 +1419,32 @@ def cmd_init(
     bullet = "·" if unicode_ok else "-"
     if final_result.azd_env_created and final_result.env_path is not None:
         typer.echo(
-            f"  {ok} created azd environment '{final_result.azd_env_name}' at {final_result.env_path.parent}"
+            f"  {ok} {_cli_ok('created azd environment')} "
+            f"'{final_result.azd_env_name}' at {_cli_path(final_result.env_path.parent)}"
         )
     if final_result.yaml_updated:
-        typer.echo(f"  {ok} updated {final_result.yaml_path}")
+        typer.echo(_cli_updated(final_result.yaml_path))
         for name in final_result.yaml_fields:
-            typer.echo(f"     {bullet} {name}")
+            typer.echo(f"     {bullet} {_cli_label(name)}")
     if final_result.env_updated and final_result.env_path is not None:
-        typer.echo(f"  {ok} updated {final_result.env_path}")
+        typer.echo(_cli_updated(final_result.env_path))
         for name in final_result.env_keys:
-            typer.echo(f"     {bullet} {name}")
+            typer.echo(f"     {bullet} {_cli_label(name)}")
     if (
         not final_result.yaml_updated
         and not final_result.env_updated
         and not final_result.azd_env_created
     ):
-        typer.echo("No configuration changes — every value was already up to date.")
+        typer.echo(_cli_ok("No configuration changes — every value was already up to date."))
 
     typer.echo("")
-    typer.echo("Next steps:")
-    typer.echo("  agentops init show       # inspect the active configuration")
-    typer.echo("  agentops doctor          # validate the workspace")
-    typer.echo("  agentops eval run        # run an evaluation")
-    typer.echo("  agentops cockpit         # open the local dashboard")
-    typer.echo("  agentops skills install  # install coding agent skills")
+    typer.echo(_cli_heading("Next steps:"))
+    typer.echo(f"  {_cli_command('agentops init show')}       # inspect the active configuration")
+    typer.echo(f"  {_cli_command('agentops eval analyze')}    # inspect eval setup before running")
+    typer.echo(f"  {_cli_command('agentops doctor')}          # validate the workspace")
+    typer.echo(f"  {_cli_command('agentops eval run')}        # run a configured evaluation")
+    typer.echo(f"  {_cli_command('agentops cockpit')}         # open the local cockpit")
+    typer.echo(f"  {_cli_command('agentops skills install')}  # install coding agent skills")
 
 
 @init_app.command("show")
@@ -1247,7 +1474,11 @@ def cmd_init_show(
 
     workspace = directory.resolve()
     if not workspace.exists():
-        typer.echo(f"Error: workspace directory does not exist: {workspace}", err=True)
+        typer.echo(
+            f"{_cli_error('Error')}: workspace directory does not exist: "
+            f"{_cli_path(workspace)}",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     snapshot = collect_snapshot(workspace)
@@ -1256,35 +1487,38 @@ def cmd_init_show(
     miss = "✗" if unicode_ok else "x"
     warn = "!" if unicode_ok else "!"
 
+    def _config_label(text: str) -> str:
+        return _cli_label(text)
+
     typer.echo("")
-    typer.echo("AgentOps configuration")
-    typer.echo("──────────────────────" if unicode_ok else "----------------------")
-    typer.echo(f"Workspace: {snapshot.workspace}")
+    typer.echo(_config_label("AgentOps configuration"))
+    typer.echo(style("──────────────────────" if unicode_ok else "----------------------", "dim"))
+    typer.echo(f"{_config_label('Workspace')}: {snapshot.workspace}")
 
     # azd environment block ------------------------------------------------
     typer.echo("")
-    typer.echo("azd environment")
+    typer.echo(_config_label("azd environment"))
     if snapshot.azd_env_name and snapshot.azd_env_path is not None:
         marker = ok if snapshot.azd_status == "ok" else warn
-        typer.echo(f"  {marker} name: {snapshot.azd_env_name}")
-        typer.echo(f"    path: {snapshot.azd_env_path}")
-        typer.echo(f"    status: {snapshot.azd_status}")
+        typer.echo(f"  {marker} {_config_label('name')}: {snapshot.azd_env_name}")
+        typer.echo(f"    {_config_label('path')}: {snapshot.azd_env_path}")
+        typer.echo(f"    {_config_label('status')}: {snapshot.azd_status}")
     else:
         typer.echo(f"  {warn} no azd environment found")
         if snapshot.azd_reason:
-            typer.echo(f"    reason: {snapshot.azd_reason}")
+            typer.echo(f"    {_config_label('reason')}: {snapshot.azd_reason}")
         typer.echo("    run `agentops init` to bootstrap one")
 
     # agentops.yaml block --------------------------------------------------
     typer.echo("")
-    typer.echo("agentops.yaml")
+    typer.echo(_config_label("agentops.yaml"))
     if snapshot.yaml_present:
         typer.echo(f"  {ok} {snapshot.yaml_path}")
-        typer.echo(f"    agent:   {snapshot.yaml_agent or '(not set)'}")
-        typer.echo(f"    dataset: {snapshot.yaml_dataset or '(not set)'}")
+        typer.echo(f"    {_config_label('agent')}:   {snapshot.yaml_agent or '(not set)'}")
+        typer.echo(f"    {_config_label('dataset')}: {snapshot.yaml_dataset or '(not set)'}")
         if snapshot.yaml_project_endpoint:
             typer.echo(
-                f"    project_endpoint (legacy yaml override): "
+                f"    {_config_label('project_endpoint')} (legacy yaml override): "
                 f"{snapshot.yaml_project_endpoint}"
             )
     else:
@@ -1293,7 +1527,7 @@ def cmd_init_show(
 
     # environment variables block -----------------------------------------
     typer.echo("")
-    typer.echo("Environment variables")
+    typer.echo(_config_label("Environment variables"))
     for var in snapshot.variables:
         if var.value:
             display = var.value if (not var.secret or reveal_secrets) else mask_secret(var.value)
@@ -1301,18 +1535,19 @@ def cmd_init_show(
         else:
             display = "(not set)"
             marker = miss if var.required else warn
-        required_label = " [required]" if var.required else ""
-        typer.echo(f"  {marker} {var.key}{required_label}")
-        typer.echo(f"    value:  {display}")
-        typer.echo(f"    source: {var.source}")
+        required_label = style(" [required]", "yellow") if var.required else ""
+        typer.echo(f"  {marker} {_config_label(var.key)}{required_label}")
+        typer.echo(f"    {_config_label('value')}:  {display}")
+        typer.echo(f"    {_config_label('source')}: {var.source}")
         if var.description:
-            typer.echo(f"    info:   {var.description}")
+            typer.echo(f"    {_config_label('info')}:   {var.description}")
 
     # Migration notice -----------------------------------------------------
     if snapshot.legacy_env_path is not None:
         typer.echo("")
         typer.echo(
-            f"Note: legacy {snapshot.legacy_env_path} is still being read for "
+            f"{_cli_warn('Note')}: legacy {_cli_path(snapshot.legacy_env_path)} "
+            "is still being read for "
             "backward compatibility. The wizard now writes to the active "
             "azd environment instead — re-run `agentops init` to migrate."
         )
@@ -1321,7 +1556,8 @@ def cmd_init_show(
     if snapshot.missing_required:
         typer.echo("")
         typer.echo(
-            f"Missing required values: {', '.join(snapshot.missing_required)}. "
+            f"{_cli_error('Missing required values')}: "
+            f"{', '.join(snapshot.missing_required)}. "
             "Run `agentops init` to provide them.",
             err=True,
         )
@@ -1364,8 +1600,64 @@ def cmd_init_explain(
 
 
 # ---------------------------------------------------------------------------
-# agentops eval run
+# agentops eval analyze / run
 # ---------------------------------------------------------------------------
+
+
+@eval_app.command("analyze")
+def cmd_eval_analyze(
+    directory: Path = typer.Option(
+        Path("."),
+        "--dir",
+        help="Target repository root directory.",
+    ),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        "-f",
+        help="Output format: text, markdown, or json.",
+    ),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help="Write the analysis to a file instead of stdout.",
+    ),
+    explain: Annotated[str | None, typer.Argument(hidden=True)] = None,
+) -> None:
+    """Analyze this repo's evaluation setup before running eval."""
+    if _maybe_explain_leaf(("eval", "analyze"), explain):
+        return
+
+    from agentops.services.eval_analysis import analyze_eval_project, render_eval_analysis
+
+    normalized_format = output_format.lower()
+    if normalized_format not in {"text", "markdown", "json"}:
+        typer.echo(
+            f"{_cli_error('Error')}: --format must be text, markdown, or json.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        analysis = analyze_eval_project(directory)
+        rendered = render_eval_analysis(analysis, normalized_format)
+    except Exception as exc:
+        typer.echo(
+            f"{_cli_error('Error')}: failed to analyze evaluation setup: {exc}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(rendered, encoding="utf-8")
+        typer.echo(f"{_cli_label('Wrote')}: {_cli_path(out)}")
+        return
+
+    if normalized_format == "text":
+        rendered = _colorize_analysis_text(rendered)
+    typer.echo(rendered, color=True)
 
 
 @eval_app.command("run")
@@ -1399,7 +1691,10 @@ def cmd_eval_run(
         return
 
     if report_format not in ("md", "html", "all"):
-        typer.echo("Error: --format must be md, html, or all.", err=True)
+        typer.echo(
+            f"{_cli_error('Error')}: --format must be md, html, or all.",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     config_path = _resolve_eval_config_path(config)
@@ -1413,7 +1708,7 @@ def cmd_eval_run(
 
     if not config_path.exists():
         typer.echo(
-            f"Error: config not found at {config_path}. "
+            f"{_cli_error('Error')}: config not found at {_cli_path(config_path)}. "
             "Run `agentops init` to scaffold a starter agentops.yaml.",
             err=True,
         )
@@ -1424,6 +1719,76 @@ def cmd_eval_run(
         output=output,
         baseline=baseline,
     )
+
+
+@eval_app.command("promote-traces")
+def cmd_eval_promote_traces(
+    source: Annotated[
+        Path,
+        typer.Option("--source", "-s", help="JSON or JSONL trace export to convert."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            "-o",
+            help="Dataset JSONL path to write when --apply is used.",
+        ),
+    ] = Path(".agentops/data/trace-regression.jsonl"),
+    max_rows: Annotated[
+        int,
+        typer.Option("--max-rows", help="Maximum candidate rows to keep."),
+    ] = 50,
+    label_mode: Annotated[
+        str,
+        typer.Option(
+            "--label-mode",
+            help="How to label expected values: self-similarity or pending.",
+        ),
+    ] = "self-similarity",
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Write the dataset and manifest instead of previewing only."),
+    ] = False,
+    explain: Annotated[str | None, typer.Argument(hidden=True)] = None,
+) -> None:
+    """Promote trace exports into reviewable regression dataset rows."""
+    if _maybe_explain_leaf(("eval", "promote-traces"), explain):
+        return
+
+    from agentops.services.trace_promotion import (
+        promote_traces,
+        render_trace_promotion_preview,
+    )
+
+    normalized_mode = label_mode.lower()
+    if normalized_mode not in {"self-similarity", "pending"}:
+        typer.echo(
+            f"{_cli_error('Error')}: --label-mode must be self-similarity or pending.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        preview = promote_traces(
+            source=source,
+            output_path=out,
+            max_rows=max_rows,
+            label_mode=normalized_mode,  # type: ignore[arg-type]
+            apply=apply,
+        )
+    except Exception as exc:
+        typer.echo(f"{_cli_error('Error')}: trace promotion failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(_colorize_analysis_text(render_trace_promotion_preview(preview)), color=True)
+    if apply:
+        typer.echo(f"{_cli_label('Wrote dataset')}: {_cli_path(preview.output_path)}")
+        typer.echo(f"{_cli_label('Wrote manifest')}: {_cli_path(preview.manifest_path)}")
+    else:
+        typer.echo(
+            f"{_cli_warn('Preview only')}: re-run with `{_cli_command('--apply')}` to write files."
+        )
 
 
 def _resolve_eval_config_path(config: Path | None) -> Path:
@@ -1448,7 +1813,10 @@ def _run_flat_schema_eval(
     try:
         config_obj = load_agentops_config(config_path)
     except Exception as exc:
-        typer.echo(f"Error: failed to load {config_path}: {exc}", err=True)
+        typer.echo(
+            f"{_cli_error('Error')}: failed to load {_cli_path(config_path)}: {exc}",
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
 
     use_default_layout = output is None
@@ -1468,7 +1836,7 @@ def _run_flat_schema_eval(
     try:
         result = run_evaluation(config_obj, options=options)
     except Exception as exc:
-        typer.echo(f"Error: evaluation failed: {exc}", err=True)
+        typer.echo(f"{_cli_error('Error')}: evaluation failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     latest_dir = config_path.parent / ".agentops" / "results" / "latest"
@@ -1477,22 +1845,22 @@ def _run_flat_schema_eval(
             _mirror_to_latest(output_dir, latest_dir)
         except Exception as exc:  # pragma: no cover - mirror failures shouldn't fail the run
             typer.echo(
-                f"Warning: failed to update {latest_dir}: {exc}",
+                f"{_cli_warn('Warning')}: failed to update {_cli_path(latest_dir)}: {exc}",
                 err=True,
             )
             latest_dir = None  # type: ignore[assignment]
     else:
         latest_dir = None  # type: ignore[assignment]
 
-    typer.echo(f"Evaluation output directory: {style(str(output_dir), 'cyan')}")
-    typer.echo(f"results.json: {style(str(output_dir / 'results.json'), 'cyan')}")
-    typer.echo(f"report.md:    {style(str(output_dir / 'report.md'), 'cyan')}")
+    typer.echo(f"{_cli_label('Evaluation output directory')}: {_cli_path(output_dir)}")
+    typer.echo(f"{_cli_label('results.json')}: {_cli_path(output_dir / 'results.json')}")
+    typer.echo(f"{_cli_label('report.md')}:    {_cli_path(output_dir / 'report.md')}")
     if latest_dir is not None:
-        typer.echo(f"latest/:      {style(str(latest_dir), 'cyan')}")
+        typer.echo(f"{_cli_label('latest/')}:      {_cli_path(latest_dir)}")
     if result.summary.overall_passed:
-        typer.echo(f"Threshold status: {style('PASSED', 'bold', 'green')}")
+        typer.echo(f"{_cli_label('Threshold status')}: {style('PASSED', 'bold', 'green')}")
         return
-    typer.echo(f"Threshold status: {style('FAILED', 'bold', 'red')}")
+    typer.echo(f"{_cli_label('Threshold status')}: {style('FAILED', 'bold', 'red')}")
     raise typer.Exit(code=exit_code_from(result))
 
 
@@ -1587,7 +1955,7 @@ def cmd_report_generate(
         return
 
     if report_format not in ("md", "all"):
-        typer.echo("Error: --format must be md or all.", err=True)
+        typer.echo(f"{_cli_error('Error')}: --format must be md or all.", err=True)
         raise typer.Exit(code=1)
 
     resolved_results_in = results_in or DEFAULT_REPORT_INPUT
@@ -1600,13 +1968,16 @@ def cmd_report_generate(
 
     if not resolved_results_in.exists():
         typer.echo(
-            f"Error: results not found at {resolved_results_in}.", err=True
+            f"{_cli_error('Error')}: results not found at "
+            f"{_cli_path(resolved_results_in)}.",
+            err=True,
         )
         raise typer.Exit(code=1)
 
     if not _is_flat_results(resolved_results_in):
         typer.echo(
-            f"Error: {resolved_results_in} is not an AgentOps 1.0 results.json. "
+            f"{_cli_error('Error')}: {_cli_path(resolved_results_in)} is not "
+            "an AgentOps 1.0 results.json. "
             "Re-run `agentops eval run` to regenerate it.",
             err=True,
         )
@@ -1619,16 +1990,75 @@ def cmd_report_generate(
             report_format=report_format,
         )
     except Exception as exc:
-        typer.echo(f"Error: report generation failed: {exc}", err=True)
+        typer.echo(f"{_cli_error('Error')}: report generation failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"Loaded results: {resolved_results_in}")
-    typer.echo(f"Generated report: {output_path}")
+    typer.echo(f"{_cli_label('Loaded results')}: {_cli_path(resolved_results_in)}")
+    typer.echo(f"{_cli_label('Generated report')}: {_cli_path(output_path)}")
 
 
 # ---------------------------------------------------------------------------
-# agentops workflow generate
+# agentops workflow analyze / generate
 # ---------------------------------------------------------------------------
+
+
+@workflow_app.command("analyze")
+def cmd_workflow_analyze(
+    directory: Path = typer.Option(
+        Path("."),
+        "--dir",
+        help="Target repository root directory.",
+    ),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        "-f",
+        help="Output format: text, markdown, or json.",
+    ),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help="Write the analysis to a file instead of stdout.",
+    ),
+    explain: Annotated[str | None, typer.Argument(hidden=True)] = None,
+) -> None:
+    """Analyze this repo's CI/CD shape before generating workflows."""
+    if _maybe_explain_leaf(("workflow", "analyze"), explain):
+        return
+
+    from agentops.services.workflow_analysis import (
+        analyze_workflow_project,
+        render_workflow_analysis,
+    )
+
+    normalized_format = output_format.lower()
+    if normalized_format not in {"text", "markdown", "json"}:
+        typer.echo(
+            f"{_cli_error('Error')}: --format must be text, markdown, or json.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        analysis = analyze_workflow_project(directory)
+        rendered = render_workflow_analysis(analysis, normalized_format)
+    except Exception as exc:
+        typer.echo(
+            f"{_cli_error('Error')}: failed to analyze CI/CD workflow shape: {exc}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(rendered, encoding="utf-8")
+        typer.echo(f"{_cli_label('Wrote')}: {_cli_path(out)}")
+        return
+
+    if normalized_format == "text":
+        rendered = _colorize_analysis_text(rendered)
+    typer.echo(rendered, color=True)
 
 
 @workflow_app.command("generate")
@@ -1664,9 +2094,11 @@ def cmd_workflow_generate(
         "auto",
         "--deploy-mode",
         help=(
-            "Deployment template mode: 'auto' uses azd when azure.yaml exists, "
-            "'azd' forces azd provision/deploy templates, 'placeholder' keeps "
-            "stack-agnostic placeholders."
+            "Deployment template mode. Default is 'auto': uses azd when azure.yaml exists "
+            "or prompt-agent when agentops.yaml targets a Foundry prompt agent; "
+            "'azd' forces azd provision/deploy templates, 'prompt-agent' "
+            "creates/evaluates a Foundry prompt candidate, and 'placeholder' "
+            "keeps stack-agnostic placeholders."
         ),
     ),
     explain: Annotated[str | None, typer.Argument(hidden=True)] = None,
@@ -1704,14 +2136,14 @@ def cmd_workflow_generate(
 
     if platform not in PLATFORMS:
         typer.echo(
-            f"Error: unknown --platform value {platform!r}. "
+            f"{_cli_error('Error')}: unknown --platform value {platform!r}. "
             f"Valid: {', '.join(PLATFORMS)}.",
             err=True,
         )
         raise typer.Exit(code=1)
     if deploy_mode not in DEPLOY_MODES:
         typer.echo(
-            f"Error: unknown --deploy-mode value {deploy_mode!r}. "
+            f"{_cli_error('Error')}: unknown --deploy-mode value {deploy_mode!r}. "
             f"Valid: {', '.join(DEPLOY_MODES)}.",
             err=True,
         )
@@ -1723,7 +2155,8 @@ def cmd_workflow_generate(
         invalid = [k for k in selected if k not in ALL_KINDS]
         if invalid:
             typer.echo(
-                f"Error: unknown --kinds value(s): {', '.join(invalid)}. "
+                f"{_cli_error('Error')}: unknown --kinds value(s): "
+                f"{', '.join(invalid)}. "
                 f"Valid: {', '.join(ALL_KINDS)}.",
                 err=True,
             )
@@ -1738,21 +2171,29 @@ def cmd_workflow_generate(
             deploy_mode=deploy_mode,
         )
     except Exception as exc:
-        typer.echo(f"Error: failed to generate CI/CD workflows: {exc}", err=True)
+        typer.echo(
+            f"{_cli_error('Error')}: failed to generate CI/CD workflows: {exc}",
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"Platform: {result.platform}")
-    typer.echo(f"Deploy mode: {result.deploy_mode}")
+    typer.echo(f"{_cli_label('Platform')}: {result.platform}")
+    deploy_mode_note = (
+        f"{result.deploy_mode} (auto default)"
+        if deploy_mode == "auto"
+        else result.deploy_mode
+    )
+    typer.echo(f"{_cli_label('Deploy mode')}: {_cli_value(deploy_mode_note)}")
     for created in result.created_files:
-        typer.echo(f" + created {created}")
+        typer.echo(_cli_created(created))
     for overwritten in result.overwritten_files:
-        typer.echo(f" ~ overwritten {overwritten}")
+        typer.echo(_cli_overwritten(overwritten))
     for skipped in result.skipped_files:
-        typer.echo(f" - skipped {skipped} (use --force to overwrite)")
+        typer.echo(_cli_skipped(skipped, " (use --force to overwrite)"))
 
     if result.created_files or result.overwritten_files:
         typer.echo("")
-        typer.echo("Next steps:")
+        typer.echo(_cli_heading("Next steps:"))
         if result.platform == "github":
             typer.echo(
                 "  1. Configure Azure Workload Identity Federation (OIDC) and set "
@@ -1781,11 +2222,21 @@ def cmd_workflow_generate(
                 "     Set AZURE_ENV_NAME and AZURE_LOCATION per environment if "
                 "your azd env names differ from dev/qa/production."
             )
+        elif result.deploy_mode == "prompt-agent":
+            typer.echo(
+                "  3. Commit a prompt/instructions file and set `prompt_file` "
+                "in agentops.yaml (or AGENTOPS_AGENT_PROMPT_FILE in CI)."
+            )
+            typer.echo(
+                "     The deploy workflow stages a Foundry prompt-agent "
+                "candidate, evaluates that exact version, then records it "
+                "as deployed when the gate passes."
+            )
         else:
             typer.echo(
                 "  3. No azure.yaml was detected. Ask your coding agent to "
-                "generate a zero-trust azd deployment first, then re-run "
-                "`agentops workflow generate --force --deploy-mode azd`."
+                "generate a zero-trust azd deployment, or use "
+                "`--deploy-mode prompt-agent` for a Foundry prompt agent."
             )
         typer.echo(
             "  4. In Settings -> Branches, require the 'AgentOps PR' status check "
@@ -1795,7 +2246,7 @@ def cmd_workflow_generate(
             "  5. Commit and push. See docs/ci-github-actions.md for the full guide."
         )
     elif result.skipped_files:
-        typer.echo("No files written. Use --force to overwrite existing workflows.")
+        typer.echo(_cli_warn("No files written. Use --force to overwrite existing workflows."))
 
 
 # ---------------------------------------------------------------------------
@@ -1864,14 +2315,14 @@ def cmd_skills_install(
         directory=directory, explicit=platform, prompt=prompt
     )
     if not resolved_platforms:
-        typer.echo("No platforms selected. Skipping skill installation.")
+        typer.echo(_cli_warn("No platforms selected. Skipping skill installation."))
         return
 
     if from_github:
         # GitHub-based skill installation
         from agentops.services.skills import install_github_skill
 
-        typer.echo(f"Installing skill from GitHub: {from_github}")
+        typer.echo(f"{_cli_label('Installing skill from GitHub')}: {from_github}")
         try:
             result = install_github_skill(
                 source=from_github,
@@ -1880,10 +2331,10 @@ def cmd_skills_install(
                 force=True,
             )
         except ValueError as exc:
-            typer.echo(f"Error: {exc}", err=True)
+            typer.echo(f"{_cli_error('Error')}: {exc}", err=True)
             raise typer.Exit(code=1) from exc
         except Exception as exc:
-            typer.echo(f"Error: failed to install skill: {exc}", err=True)
+            typer.echo(f"{_cli_error('Error')}: failed to install skill: {exc}", err=True)
             raise typer.Exit(code=1) from exc
 
         _print_skills_result(result)
@@ -1897,7 +2348,7 @@ def cmd_skills_install(
             directory=directory, platforms=resolved_platforms, force=True
         )
     except Exception as exc:
-        typer.echo(f"Error: failed to install skills: {exc}", err=True)
+        typer.echo(f"{_cli_error('Error')}: failed to install skills: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     _print_skills_result(result)
@@ -1907,7 +2358,7 @@ def cmd_skills_install(
     try:
         reg_result = register_skills(directory=directory, platforms=resolved_platforms)
     except Exception as exc:
-        typer.echo(f"Warning: failed to register skills: {exc}", err=True)
+        typer.echo(f"{_cli_warn('Warning')}: failed to register skills: {exc}", err=True)
     else:
         _print_registration_result(reg_result)
 
@@ -1937,13 +2388,13 @@ def cmd_mcp_serve(
     try:
         from agentops.mcp.server import serve_stdio
     except RuntimeError as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(f"{_cli_error('Error')}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     try:
         serve_stdio()
     except RuntimeError as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(f"{_cli_error('Error')}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
 
@@ -2171,6 +2622,20 @@ def cmd_doctor(
             help="Exit non-zero if any pre-flight check fails or warns.",
         ),
     ] = False,
+    evidence_pack: Annotated[
+        bool,
+        typer.Option(
+            "--evidence-pack",
+            help="Write `.agentops/release/latest/evidence.json` and `evidence.md`.",
+        ),
+    ] = False,
+    evidence_out: Annotated[
+        Path | None,
+        typer.Option(
+            "--evidence-out",
+            help="Directory for release evidence artifacts (default: `.agentops/release/latest`).",
+        ),
+    ] = None,
 ) -> None:
     """Diagnose local AgentOps, Foundry, Azure telemetry, and WAF-AI gaps."""
     # When a subcommand was provided (e.g. `doctor explain`), defer to it
@@ -2190,6 +2655,8 @@ def cmd_doctor(
         exclude_rules=exclude_rules,
         no_preflight=no_preflight,
         strict_preflight=strict_preflight,
+        evidence_pack=evidence_pack,
+        evidence_out=evidence_out,
     )
 
 
@@ -2204,6 +2671,8 @@ def _run_doctor_analyze(
     exclude_rules: str | None,
     no_preflight: bool,
     strict_preflight: bool,
+    evidence_pack: bool,
+    evidence_out: Path | None,
 ) -> None:
     """Run the doctor analyzer pipeline.
 
@@ -2226,12 +2695,23 @@ def _run_doctor_analyze(
     workspace = workspace.resolve()
     resolved_config = _resolve_agent_config_path(workspace, config_path)
 
+    if evidence_pack and categories:
+        typer.echo(
+            f"{_cli_error('Error')}: --evidence-pack requires a full doctor run; omit --categories.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     if not no_preflight:
+        typer.echo(
+            "doctor: running pre-flight checks (workspace, Azure auth, Foundry discovery)",
+            err=True,
+        )
         report = run_preflight(workspace, scope="doctor")
         typer.echo(format_report(report), err=True)
         if report.has_failures or (strict_preflight and report.has_warnings):
             typer.echo(
-                "Pre-flight failed. Resolve the issues above or re-run "
+                f"{_cli_error('Pre-flight failed')}. Resolve the issues above or re-run "
                 "with `--no-preflight` to bypass.",
                 err=True,
             )
@@ -2240,7 +2720,7 @@ def _run_doctor_analyze(
     try:
         config = load_agent_config(resolved_config)
     except Exception as exc:
-        typer.echo(f"Error loading agent config: {exc}", err=True)
+        typer.echo(f"{_cli_error('Error loading agent config')}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     if lookback_days is not None:
@@ -2250,7 +2730,7 @@ def _run_doctor_analyze(
         severity_floor = Severity(severity_fail.lower())
     except ValueError as exc:
         typer.echo(
-            f"Error: invalid --severity-fail '{severity_fail}'. "
+            f"{_cli_error('Error')}: invalid --severity-fail '{severity_fail}'. "
             "Use one of: info, warning, critical.",
             err=True,
         )
@@ -2277,9 +2757,10 @@ def _run_doctor_analyze(
                         if exclude_rules
                         else None
                     ),
+                    progress=lambda msg: typer.echo(msg, err=True),
                 )
             except Exception as exc:  # pragma: no cover
-                typer.echo(f"Error running analyzer: {exc}", err=True)
+                typer.echo(f"{_cli_error('Error running analyzer')}: {exc}", err=True)
                 raise typer.Exit(code=1) from exc
 
             duration_seconds = _time.perf_counter() - started_perf
@@ -2306,6 +2787,8 @@ def _run_doctor_analyze(
                 max_severity=record.max_severity,
                 sources_enabled=sources_enabled,
             )
+            for finding in result.findings:
+                telemetry.record_agent_finding_span(finding)
     finally:
         telemetry.shutdown()
 
@@ -2313,12 +2796,46 @@ def _run_doctor_analyze(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(render_report(result), encoding="utf-8")
 
-    typer.echo(f"Wrote {out_path}")
+    typer.echo(f"{_cli_label('Wrote')}: {_cli_path(out_path)}")
+    if evidence_pack:
+        from agentops.services.evidence_pack import write_release_evidence
+
+        try:
+            evidence_result = write_release_evidence(
+                workspace=workspace,
+                analysis=result,
+                out_dir=evidence_out,
+            )
+        except Exception as exc:
+            typer.echo(
+                f"{_cli_error('Error writing evidence pack')}: {exc}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        evidence = evidence_result.evidence
+        status_tone = (
+            "green"
+            if evidence.status == "ready"
+            else "yellow"
+            if evidence.status == "ready_with_warnings"
+            else "red"
+        )
+        typer.echo(
+            f"{_cli_label('Release readiness')}: {style(evidence.status, 'bold', status_tone)}"
+        )
+        typer.echo(
+            f"{_cli_label('Evidence pack')}: {_cli_path(evidence_result.json_path)}"
+        )
+        typer.echo(
+            f"{_cli_label('Evidence report')}: {_cli_path(evidence_result.markdown_path)}"
+        )
     if history_file is not None:
-        typer.echo(f"Appended history: {history_file}")
-    typer.echo(f"Findings: {len(result.findings)}")
+        typer.echo(f"{_cli_label('Appended history')}: {_cli_path(history_file)}")
+    typer.echo(f"{_cli_label('Findings')}: {len(result.findings)}")
     if result.max_severity is not None:
-        typer.echo(f"Max severity: {result.max_severity.value}")
+        severity = result.max_severity.value
+        tone = "red" if severity == "critical" else "yellow" if severity == "warning" else "green"
+        typer.echo(f"{_cli_label('Max severity')}: {style(severity, 'bold', tone)}")
 
     if result.max_severity is not None and result.max_severity >= severity_floor:
         raise typer.Exit(code=2)
@@ -2387,7 +2904,10 @@ def _emit_doctor_explain(
 
     format_ = format_.lower()
     if format_ not in {"text", "markdown", "html"}:
-        typer.echo("Invalid --format. Use one of: text, markdown, html.", err=True)
+        typer.echo(
+            f"{_cli_error('Invalid --format')}. Use one of: text, markdown, html.",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     text = _build_doctor_explain_text(
@@ -2412,7 +2932,7 @@ def _emit_doctor_explain(
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(output, encoding="utf-8")
-        typer.echo(f"Wrote {out}")
+        typer.echo(f"{_cli_label('Wrote')}: {_cli_path(out)}")
 
     if open_browser:
         browser_path = out if out is not None and format_ == "html" else None
@@ -2426,7 +2946,7 @@ def _emit_doctor_explain(
             ) as temp:
                 temp.write(html)
                 browser_path = Path(temp.name)
-            typer.echo(f"Opened browser copy: {browser_path}")
+            typer.echo(f"{_cli_label('Opened browser copy')}: {_cli_path(browser_path)}")
         webbrowser.open(browser_path.resolve().as_uri())
 
     if out is not None or open_browser:
@@ -2603,8 +3123,12 @@ def _build_doctor_explain_text(
     lines.extend(
         _manual_paragraphs(
             "This is the catalog of findings Doctor can emit. Each entry "
-            "shows the finding id, the short purpose, required sources, and "
-            "a public reference URL.",
+            "shows the finding id, whether it is LLM-judged or source-based, "
+            "the short purpose, required sources, and a public reference URL.",
+            "`[LLM Judge]` means the check calls the configured judge model "
+            "(opt-in and may use tokens). `[Source-based]` means no judge "
+            "model is called; Doctor evaluates local files, eval history, "
+            "Foundry, App Insights, or Azure resource metadata.",
         )
     )
     for category in category_order:
@@ -2622,10 +3146,17 @@ def _build_doctor_explain_text(
                 source_labels.get(source, source) for source in spec.requires
             )
             severities = ", ".join(severity.value for severity in spec.severities)
+            if spec.is_llm_judged:
+                mode_badge = style("[LLM Judge]", "bold", "magenta")
+                mode_text = "LLM Judge (opt-in; uses configured judge model)"
+            else:
+                mode_badge = style("[Source-based]", "dim")
+                mode_text = "Source-based (no judge model call)"
             lines.append("")
-            lines.append(f"    - {spec.id}")
+            lines.append(f"    - {mode_badge} {spec.id}")
             lines.extend(_manual_paragraphs(spec.title, indent="        "))
             lines.extend(_manual_paragraphs(spec.summary, indent="        "))
+            lines.append(f"        mode: {mode_text}")
             lines.append(f"        severity: {severities}")
             if requires:
                 lines.extend(_manual_paragraphs(f"requires: {requires}", indent="        "))
@@ -2763,7 +3294,9 @@ def _build_doctor_explain_markdown(
             "",
             "## CHECK CATALOG",
             "",
-            "This is the catalog of findings Doctor can emit. Each entry shows the finding id, the short purpose, required sources, and a public reference URL.",
+            "This is the catalog of findings Doctor can emit. Each entry shows the finding id, whether it is LLM-judged or source-based, the short purpose, required sources, and a public reference URL.",
+            "",
+            "**Legend:** `LLM Judge` calls the configured judge model (opt-in and may use tokens). `Source-based` does not call a judge model; it evaluates local files, eval history, Foundry, App Insights, or Azure resource metadata.",
         ]
     )
 
@@ -2782,13 +3315,20 @@ def _build_doctor_explain_markdown(
             )
             severities = ", ".join(severity.value for severity in spec.severities)
             docs_url = reference_url_for(spec)
+            mode = (
+                "LLM Judge (opt-in; uses configured judge model)"
+                if spec.is_llm_judged
+                else "Source-based (no judge model call)"
+            )
             lines.extend(
                 [
-                    f"#### `{spec.id}`",
+                    f"#### {'[LLM Judge] ' if spec.is_llm_judged else '[Source-based] '}`{spec.id}`",
                     "",
                     spec.title,
                     "",
                     spec.summary,
+                    "",
+                    f"**Mode:** {mode}",
                     "",
                     f"**Severity:** {severities}",
                 ]
@@ -3782,7 +4322,7 @@ def cmd_agent_serve(
         import uvicorn
     except ImportError as exc:
         typer.echo(
-            "Error: agent extras not installed. "
+            f"{_cli_error('Error')}: agent extras not installed. "
             "Run `pip install agentops-toolkit[agent]`.",
             err=True,
         )
@@ -3797,7 +4337,7 @@ def cmd_agent_serve(
     try:
         config = load_agent_config(resolved_config)
     except Exception as exc:
-        typer.echo(f"Error loading agent config: {exc}", err=True)
+        typer.echo(f"{_cli_error('Error loading agent config')}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     fastapi_app = create_app(
@@ -3808,7 +4348,7 @@ def cmd_agent_serve(
 
     if no_verify:
         typer.echo(
-            "WARNING: Copilot Extensions signature validation is disabled. "
+            f"{_cli_warn('WARNING')}: Copilot Extensions signature validation is disabled. "
             "Use only for local development."
         )
 
@@ -3848,7 +4388,7 @@ def cmd_cockpit(
         import uvicorn
     except ImportError as exc:
         typer.echo(
-            "Error: cockpit requires the [agent] extra. "
+            f"{_cli_error('Error')}: cockpit requires the [agent] extra. "
             "Run `pip install agentops-toolkit[agent]`.",
             err=True,
         )
@@ -3868,7 +4408,7 @@ def cmd_cockpit(
         typer.echo(format_report(report), err=True)
         if report.has_failures:
             typer.echo(
-                "Pre-flight failed. Resolve the issues above or re-run "
+                f"{_cli_error('Pre-flight failed')}. Resolve the issues above or re-run "
                 "with `--no-preflight` to bypass.",
                 err=True,
             )
@@ -3886,7 +4426,7 @@ def cmd_cockpit(
     if _port_in_use(host, port):
         if _existing_agentops_cockpit(host, port):
             typer.echo(
-                f"AgentOps cockpit is already running on {url} - "
+                f"{_cli_warn('AgentOps cockpit is already running')} on {_cli_path(url)} - "
                 "opening browser. Stop the existing cockpit "
                 "(Ctrl+C in its terminal) before starting a new one.",
                 err=True,
@@ -3897,22 +4437,24 @@ def cmd_cockpit(
                 pass
             raise typer.Exit(code=0)
         typer.echo(
-            f"Port {port} is already in use by another process. "
+            f"{_cli_error('Port')} {port} is already in use by another process. "
             f"Pick a different port with `agentops cockpit --port <N>`.",
             err=True,
         )
         raise typer.Exit(code=1)
 
-    typer.echo(f"AgentOps cockpit → {url}")
+    typer.echo(f"{_cli_heading('AgentOps cockpit')} → {_cli_path(url)}")
     connection_rows: list[tuple[str, str]] = [("workspace", str(workspace))]
     connection_rows.extend(_summarize_cockpit_connection(workspace))
     label_width = max(len(label) for label, _ in connection_rows)
     for label, value in connection_rows:
         padding = " " * (label_width - len(label))
-        typer.echo(f"{label}:{padding} {value}")
-    typer.echo("Run `agentops doctor` in another terminal to populate doctor findings.")
+        typer.echo(f"{_cli_label(label)}:{padding} {value}")
+    typer.echo(
+        f"Run {_cli_command('agentops doctor')} in another terminal to populate doctor findings."
+    )
     typer.echo("")
-    typer.echo("Press Enter (or Ctrl+C) to stop the cockpit.")
+    typer.echo(style("Press Enter (or Ctrl+C) to stop the cockpit.", "dim"))
 
     # Silence uvicorn's own error logger so the friendly bind-failure
     # message below is not preceded by a red traceback line. The
@@ -3969,7 +4511,7 @@ def cmd_cockpit(
         )
         if is_port_collision:
             typer.echo(
-                f"Port {port} is busy and the cockpit could not "
+                f"{_cli_error('Port')} {port} is busy and the cockpit could not "
                 "bind to it. Common causes:\n"
                 f"  • a previous `agentops cockpit` is still "
                 "holding the socket (Windows TIME_WAIT, lasts up to "
@@ -3985,7 +4527,7 @@ def cmd_cockpit(
                 err=True,
             )
             raise typer.Exit(code=1)
-        typer.echo(f"Failed to start cockpit: {exc}", err=True)
+        typer.echo(f"{_cli_error('Failed to start cockpit')}: {exc}", err=True)
         raise typer.Exit(code=1)
 
     try:
@@ -3998,7 +4540,7 @@ def cmd_cockpit(
     except (EOFError, KeyboardInterrupt):
         pass
 
-    typer.echo("Stopping cockpit…")
+    typer.echo(_cli_warn("Stopping cockpit…"))
     server.should_exit = True
     server_thread.join(timeout=5)
 

@@ -40,8 +40,9 @@ SOURCE_LABELS: Dict[str, str] = {
 SOURCE_DESCRIPTIONS: Dict[str, str] = {
     "workspace": (
         "Local project files: `.agentops/` configs, bundles, datasets, "
-        "GitHub Actions workflows, `.gitignore`, `CHANGELOG.md`, and other "
-        "repo files used for CI / release hygiene checks."
+        "GitHub Actions / Azure DevOps workflows, AI Landing Zone deployment "
+        "signals, `.gitignore`, `CHANGELOG.md`, and other repo files used for "
+        "CI / release hygiene checks."
     ),
     "results_history": (
         "Past AgentOps evaluation outputs. Doctor reads local "
@@ -354,6 +355,87 @@ CHECKS: Tuple[CheckSpec, ...] = (
         ),
         severities=(Severity.WARNING,),
         requires=("workspace",),
+    ),
+    CheckSpec(
+        id="opex.ailz_readiness",
+        category=Category.OPERATIONAL_EXCELLENCE,
+        title="AI Landing Zone deployment readiness detected",
+        summary=(
+            "Doctor found canonical AI Landing Zone signals and reports "
+            "the local readiness dimensions for landing-zone preflight, "
+            "azd/Bicep workflow deployment, AgentOps eval config, and "
+            "private-network runner planning."
+        ),
+        severities=(Severity.INFO,),
+        requires=("workspace",),
+    ),
+    CheckSpec(
+        id="opex.ailz_gaps",
+        category=Category.OPERATIONAL_EXCELLENCE,
+        title="AI Landing Zone deployment readiness has gaps",
+        summary=(
+            "The workspace looks like an AI Landing Zone project, but "
+            "one or more readiness dimensions are missing before CI/CD "
+            "can confidently provision and validate the workload."
+        ),
+        severities=(Severity.WARNING,),
+        requires=("workspace",),
+    ),
+    CheckSpec(
+        id="opex.release.no_eval_evidence",
+        category=Category.OPERATIONAL_EXCELLENCE,
+        title="No evaluation evidence is available for release",
+        summary=(
+            "No completed AgentOps eval run was found, so the project has no "
+            "quality evidence to attach to a production promotion."
+        ),
+        severities=(Severity.WARNING,),
+        requires=("workspace", "results_history"),
+    ),
+    CheckSpec(
+        id="opex.release.latest_eval_failed",
+        category=Category.OPERATIONAL_EXCELLENCE,
+        title="Latest evaluation run failed",
+        summary=(
+            "The most recent eval result did not pass, making the release "
+            "evidence blocked until the failing rows or thresholds are fixed."
+        ),
+        severities=(Severity.CRITICAL,),
+        requires=("results_history",),
+    ),
+    CheckSpec(
+        id="opex.release.no_baseline",
+        category=Category.OPERATIONAL_EXCELLENCE,
+        title="No baseline result is available for regression gating",
+        summary=(
+            "The current eval can pass thresholds, but AgentOps has no "
+            "known-good baseline or prior run to show whether the candidate "
+            "regressed from production behavior."
+        ),
+        severities=(Severity.WARNING,),
+        requires=("workspace", "results_history"),
+    ),
+    CheckSpec(
+        id="opex.release.no_trace_regression_dataset",
+        category=Category.OPERATIONAL_EXCELLENCE,
+        title="Production traces are not feeding a regression dataset yet",
+        summary=(
+            "No trace-regression manifest exists, so production incidents and "
+            "high-value conversations are not yet part of the eval flywheel."
+        ),
+        severities=(Severity.INFO,),
+        requires=("workspace", "results_history"),
+    ),
+    CheckSpec(
+        id="opex.release.no_continuous_eval",
+        category=Category.OPERATIONAL_EXCELLENCE,
+        title="No enabled Foundry continuous evaluation rule is attached",
+        summary=(
+            "The Foundry control plane is reachable, but no enabled online "
+            "evaluation rule was detected for ongoing production scoring."
+        ),
+        severities=(Severity.WARNING,),
+        requires=("foundry_control",),
     ),
     CheckSpec(
         id="opex.results_not_gitignored",

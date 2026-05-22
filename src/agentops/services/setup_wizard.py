@@ -60,9 +60,8 @@ DATASET_HELP = (
 
 APPINSIGHTS_TITLE = "Application Insights connection string (optional)"
 APPINSIGHTS_HELP = (
-    "Enables tracing and the Cockpit App Insights tile. Treated as a secret\n"
-    "and saved to the active azd environment file (git-ignored).\n"
-    "Leave blank to skip."
+    "Press Enter to auto-discover it from the Foundry project.\n"
+    "Paste one only to force a specific App Insights resource."
 )
 
 
@@ -500,9 +499,17 @@ def run_wizard(
             echo("")
             echo(APPINSIGHTS_TITLE)
             echo(_indent(APPINSIGHTS_HELP))
+            if defaults.appinsights_connection_string:
+                echo(
+                    "  Current: "
+                    f"{_mask_secret(defaults.appinsights_connection_string)} "
+                    "(Enter keeps it)."
+                )
+            else:
+                echo("  Enter = auto-discover.")
             raw = prompt(
                 "Application Insights connection string",
-                defaults.appinsights_connection_string,
+                None,
             )
             value = raw.strip()
             if value and value != (defaults.appinsights_connection_string or ""):
@@ -536,7 +543,7 @@ class SetupSnapshotVar:
 
     key: str
     value: Optional[str]
-    source: str  # "azd-env" | "process-env" | "agentops.yaml" | "not set"
+    source: str  # "azd-env" | "process-env" | "agentops.yaml" | "default" | "not set"
     secret: bool = False
     required: bool = False
     description: str = ""
@@ -617,6 +624,8 @@ def collect_snapshot(workspace: Path) -> SetupSnapshot:
             value, source = env_value, "azd-env" if env_values.get(key) else "legacy-.agentops/.env"
         elif proc_value:
             value, source = proc_value, "process-env"
+        elif key == "AGENTOPS_FOUNDRY_MODE":
+            value, source = "cloud", "default"
         else:
             value, source = None, "not set"
         variables.append(

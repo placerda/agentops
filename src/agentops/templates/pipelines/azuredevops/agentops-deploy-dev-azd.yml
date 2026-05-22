@@ -1,5 +1,7 @@
 # AgentOps - Deploy to dev with azd (Azure DevOps Pipelines)
 #
+# agentops:deploy-mode=azd
+#
 # Delegates provision/deploy to Azure Developer CLI. AgentOps only runs
 # the eval gate; azd owns infra, packaging, deploy, and azure.yaml hooks.
 #
@@ -56,6 +58,7 @@ stages:
                         azd env set AZURE_LOCATION "$AZURE_LOCATION"
                       fi
                       if [ "$(RUN_AZD_PROVISION)" = "true" ]; then
+__AILZ_PREFLIGHT_COMMAND__
                         azd provision --no-prompt
                       fi
 
@@ -83,6 +86,7 @@ stages:
               AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: $(AZURE_AI_FOUNDRY_PROJECT_ENDPOINT)
               AZURE_OPENAI_ENDPOINT: $(AZURE_OPENAI_ENDPOINT)
               AZURE_OPENAI_DEPLOYMENT: $(AZURE_OPENAI_DEPLOYMENT)
+              APPLICATIONINSIGHTS_CONNECTION_STRING: $(APPLICATIONINSIGHTS_CONNECTION_STRING)
           - task: PublishPipelineArtifact@1
             condition: always()
             inputs:
@@ -107,17 +111,17 @@ stages:
                     azureSubscription: $(AZURE_SERVICE_CONNECTION)
                     scriptType: bash
                     scriptLocation: inlineScript
-                     inlineScript: |
-                       curl -fsSL https://aka.ms/install-azd.sh | bash
-                       test -f azure.yaml || {
-                         echo "##vso[task.logissue type=error;sourcepath=azure.yaml]No azure.yaml found. Ask your coding agent to generate a zero-trust azd deployment, then re-run this pipeline."
-                         exit 1
-                       }
-                       azd env new "$(AZURE_ENV_NAME)" --no-prompt --subscription "$(AZURE_SUBSCRIPTION_ID)" ${AZURE_LOCATION:+--location "$AZURE_LOCATION"} \
-                         || azd env select "$(AZURE_ENV_NAME)"
-                       azd env set AZURE_SUBSCRIPTION_ID "$(AZURE_SUBSCRIPTION_ID)"
-                       if [ -n "$AZURE_LOCATION" ]; then
-                         azd env set AZURE_LOCATION "$AZURE_LOCATION"
-                       fi
-                       azd env refresh "$(AZURE_ENV_NAME)" --no-prompt
-                       azd deploy --no-prompt
+                    inlineScript: |
+                      curl -fsSL https://aka.ms/install-azd.sh | bash
+                      test -f azure.yaml || {
+                        echo "##vso[task.logissue type=error;sourcepath=azure.yaml]No azure.yaml found. Ask your coding agent to generate a zero-trust azd deployment, then re-run this pipeline."
+                        exit 1
+                      }
+                      azd env new "$(AZURE_ENV_NAME)" --no-prompt --subscription "$(AZURE_SUBSCRIPTION_ID)" ${AZURE_LOCATION:+--location "$AZURE_LOCATION"} \
+                        || azd env select "$(AZURE_ENV_NAME)"
+                      azd env set AZURE_SUBSCRIPTION_ID "$(AZURE_SUBSCRIPTION_ID)"
+                      if [ -n "$AZURE_LOCATION" ]; then
+                        azd env set AZURE_LOCATION "$AZURE_LOCATION"
+                      fi
+                      azd env refresh "$(AZURE_ENV_NAME)" --no-prompt
+                      azd deploy --no-prompt

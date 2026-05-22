@@ -3,6 +3,25 @@
 This page explains the core AgentOps building blocks. For the full schema
 reference and architecture details, see [how-it-works.md](how-it-works.md).
 
+## AgentOps + Microsoft Foundry
+
+AgentOps is the repo-side workflow layer for teams building on Microsoft
+Foundry. It complements Foundry rather than replacing it:
+
+| Microsoft Foundry is the system of record for... | AgentOps adds... |
+|---|---|
+| Hosted agents, model deployments, runtime traces, monitor views, evaluations, datasets, red teaming, and operations | Source-controlled eval config, local and CI gates, normalized `results.json`, PR-friendly `report.md`, Doctor diagnostics, release evidence, trace-to-dataset promotion, generated workflows, and a local Cockpit |
+
+Use Foundry for the authoritative runtime and cloud-evaluation drilldown.
+Use AgentOps to make the day-to-day developer loop repeatable: initialize
+the workspace, run the same eval locally and in CI, publish or link back to
+Foundry, emit App Insights telemetry, and surface the next repo-side action
+in the Cockpit.
+
+The production-readiness loop is: evaluate the candidate, compare it to a
+baseline, run Doctor, generate release evidence, ship through Foundry/azd, then
+promote reviewed production traces back into regression datasets.
+
 ## How an Evaluation Works
 
 ```mermaid
@@ -44,7 +63,8 @@ run history, and optional supporting files.
 agentops.yaml          # flat config: agent, dataset, thresholds
 .agentops/
 ├── data/              # dataset rows (JSONL)
-└── results/           # run outputs + latest/ pointer
+├── results/           # run outputs + latest/ pointer
+└── release/           # evidence.json/evidence.md when generated
 ```
 
 ### AgentOps Config

@@ -39,15 +39,18 @@ Limitations (documented in the YAML schema docstring as well):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from agentops.core.agentops_config import DatasetSyncConfig
 from agentops.core.results import RunResult
 
 logger = logging.getLogger("agentops.pipeline.cloud_runner")
@@ -74,6 +77,8 @@ class CloudRunResult:
     #: or the download failed (in which case orchestrator falls back to
     #: a thin RunResult that just records the portal URL).
     output_items: List[Dict[str, Any]] = field(default_factory=list)
+    #: Dataset lineage and submission mode recorded for reports/Cockpit.
+    dataset: Dict[str, Any] = field(default_factory=dict)
 
 
 # Map AgentOps evaluator class names to the OpenAI Evals API evaluator
@@ -117,8 +122,9 @@ _CLOUD_PLACEHOLDERS = {
 }
 
 
-_DEFAULT_POLL_INTERVAL_SECONDS = 5.0
-_DEFAULT_MAX_POLL_ATTEMPTS = 120  # 10 minutes at 5s intervals
+_DEFAULT_POLL_INTERVAL_SECONDS = 2.0
+_DEFAULT_MAX_POLL_ATTEMPTS = 300  # 10 minutes at 2s intervals
+_DEFAULT_HEARTBEAT_SECONDS = 10.0
 _TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled"}
 
 
@@ -133,6 +139,7 @@ def run_on_foundry_cloud(
     dataset_path: Path,
     project_endpoint: str,
     evaluation_name: Optional[str] = None,
+    dataset_sync: Optional[DatasetSyncConfig] = None,
     poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
     max_poll_attempts: int = _DEFAULT_MAX_POLL_ATTEMPTS,
     progress: Optional[Callable[[str], None]] = None,
@@ -152,6 +159,10 @@ def run_on_foundry_cloud(
         ``https://contoso.services.ai.azure.com/api/projects/p``).
     evaluation_name:
         Optional display name. Defaults to ``agentops-cloud-<short-uuid>``.
+    dataset_sync:
+        Optional submission policy. ``auto`` and ``inline`` currently use
+        inline ``file_content`` compatibility and record that lineage; ``foundry``
+        fails fast until the Foundry dataset reference path is validated.
     poll_interval_seconds, max_poll_attempts:
         Control polling cadence and bound. The default budget is
         ~10 minutes.
@@ -219,9 +230,19 @@ def run_on_foundry_cloud(
         )
 
     progress(f"cloud: preparing run '{eval_name}'")
+    progress(
+        "cloud: remote Foundry evaluations are asynchronous; small smoke "
+        "runs commonly take 30-90s depending on queueing, agent latency, "
+        "and evaluator model latency."
+    )
 
     item_schema = _build_item_schema(dataset_path)
-    source = _build_file_content_source(dataset_path, progress=progress)
+    source, dataset_lineage = _build_dataset_source(
+        dataset_path,
+        dataset_sync or DatasetSyncConfig(),
+        project_client=project_client,
+        progress=progress,
+    )
 
     progress(
         f"cloud: creating eval ({len(testing_criteria)} criteria, "
@@ -314,6 +335,7 @@ def run_on_foundry_cloud(
         report_url=report_url,
         evaluation_name=eval_name,
         output_items=output_items,
+        dataset=dataset_lineage,
     )
 
 
@@ -437,6 +459,208 @@ def _build_file_content_source(
     }
 
 
+def _build_dataset_source(
+    dataset_path: Path,
+    dataset_sync: DatasetSyncConfig,
+    *,
+    project_client: Any,
+    progress: Callable[[str], None],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    if dataset_sync.mode == "inline":
+        source = _build_file_content_source(dataset_path, progress=progress)
+        return source, _build_inline_dataset_lineage(dataset_path, dataset_sync)
+
+    try:
+        source, lineage = _build_foundry_dataset_source(
+            dataset_path,
+            dataset_sync,
+            project_client=project_client,
+            progress=progress,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if dataset_sync.mode == "foundry":
+            raise
+        reason = _summarize_dataset_sync_error(exc)
+        logger.debug(
+            "Foundry dataset sync failed; falling back to inline file_content",
+            exc_info=True,
+        )
+        progress(
+            "cloud: dataset sync unavailable; using inline rows for this run. "
+            f"Reason: {reason}"
+        )
+        source = _build_file_content_source(dataset_path, progress=progress)
+        lineage = _build_inline_dataset_lineage(dataset_path, dataset_sync)
+        lineage["status"] = "auto_fallback_inline"
+        lineage["sync_error"] = reason
+        return source, lineage
+    return source, lineage
+
+
+def _build_foundry_dataset_source(
+    dataset_path: Path,
+    dataset_sync: DatasetSyncConfig,
+    *,
+    project_client: Any,
+    progress: Callable[[str], None],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    sha256 = _sha256_file(dataset_path)
+    name = dataset_sync.name or _derived_foundry_dataset_name(dataset_path)
+    version = _resolved_foundry_dataset_version(dataset_sync.version, sha256)
+    progress(f"cloud: syncing dataset to Foundry {name}@{version}")
+
+    dataset = _get_or_upload_foundry_dataset(
+        project_client,
+        name=name,
+        version=version,
+        dataset_path=dataset_path,
+        progress=progress,
+    )
+    dataset_id = _dataset_attr(dataset, "id")
+    if not dataset_id:
+        raise RuntimeError(
+            f"Foundry dataset {name}@{version} did not return an id."
+        )
+    progress(f"cloud: using Foundry dataset {name}@{version}")
+    return (
+        {
+            "type": "file_id",
+            "id": dataset_id,
+        },
+        {
+            "mode": "foundry",
+            "requested_mode": dataset_sync.mode,
+            "source_type": "file_id",
+            "local_path": str(dataset_path),
+            "sha256": sha256,
+            "status": "synced",
+            "foundry_name": name,
+            "foundry_version": version,
+            "foundry_id": dataset_id,
+            "foundry_uri": _dataset_attr(dataset, "dataUri"),
+        },
+    )
+
+
+def _get_or_upload_foundry_dataset(
+    project_client: Any,
+    *,
+    name: str,
+    version: str,
+    dataset_path: Path,
+    progress: Callable[[str], None],
+) -> Any:
+    try:
+        dataset = project_client.datasets.get(name=name, version=version)
+        progress(f"cloud: found existing Foundry dataset {name}@{version}")
+        return dataset
+    except Exception as exc:  # noqa: BLE001
+        if not _looks_not_found(exc):
+            raise
+
+    try:
+        return project_client.datasets.upload_file(
+            name=name,
+            version=version,
+            file_path=str(dataset_path),
+        )
+    except Exception as exc:  # noqa: BLE001
+        if _looks_conflict(exc):
+            progress(
+                f"cloud: Foundry dataset {name}@{version} already exists; "
+                "reusing it"
+            )
+            return project_client.datasets.get(name=name, version=version)
+        raise
+
+
+def _build_inline_dataset_lineage(
+    dataset_path: Path,
+    dataset_sync: DatasetSyncConfig,
+) -> Dict[str, Any]:
+    """Describe the local-to-Foundry dataset relationship for inline runs."""
+    lineage: Dict[str, Any] = {
+        "mode": "inline",
+        "requested_mode": dataset_sync.mode,
+        "source_type": "file_content",
+        "local_path": str(dataset_path),
+        "sha256": _sha256_file(dataset_path),
+        "status": "compatibility_inline",
+        "foundry_behavior": (
+            "Foundry may materialize inline rows as eval-data-* backing "
+            "dataset assets in the project Data page."
+        ),
+    }
+    if dataset_sync.name:
+        lineage["configured_name"] = dataset_sync.name
+    if dataset_sync.version:
+        lineage["configured_version"] = dataset_sync.version
+    return lineage
+
+
+def _summarize_dataset_sync_error(exc: Exception) -> str:
+    text = str(exc)
+    lower = text.lower()
+    if "defaultazurecredential failed to retrieve a token" in lower:
+        return (
+            "Azure authentication was unavailable for Foundry dataset sync. "
+            "Run `az login` or set `dataset_sync.mode: inline` to skip dataset "
+            "asset sync during quick demos."
+        )
+    if "azureclicredential: failed to invoke the azure cli" in lower:
+        return (
+            "Azure CLI authentication was unavailable for Foundry dataset sync. "
+            "Run `az login` or set `dataset_sync.mode: inline` for this run."
+        )
+    first_line = text.splitlines()[0].strip() if text else exc.__class__.__name__
+    if len(first_line) > 180:
+        first_line = first_line[:177] + "..."
+    return f"{exc.__class__.__name__}: {first_line}"
+
+
+def _derived_foundry_dataset_name(dataset_path: Path) -> str:
+    stem = dataset_path.stem.lower()
+    slug = re.sub(r"[^a-z0-9_-]+", "-", stem).strip("-_")
+    return f"agentops-{slug or 'dataset'}"
+
+
+def _resolved_foundry_dataset_version(configured: str, sha256: str) -> str:
+    if configured == "content-hash":
+        return f"sha256-{sha256[:16]}"
+    return configured
+
+
+def _dataset_attr(dataset: Any, name: str) -> Optional[str]:
+    value = getattr(dataset, name, None)
+    if value is None and isinstance(dataset, dict):
+        value = dataset.get(name)
+    return str(value) if value else None
+
+
+def _looks_not_found(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 404:
+        return True
+    text = str(exc).lower()
+    return "not found" in text or "resource not found" in text or "404" in text
+
+
+def _looks_conflict(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 409:
+        return True
+    text = str(exc).lower()
+    return "already exists" in text or "conflict" in text or "409" in text
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _build_item_schema(dataset_path: Path) -> Dict[str, Any]:
     """Inspect the first dataset row to derive a JSON schema.
 
@@ -479,14 +703,22 @@ def _poll_until_terminal(
 ) -> Any:
     """Poll ``runs.retrieve`` until the run reaches a terminal status."""
     last_status: Optional[str] = None
+    started = time.monotonic()
+    last_progress_at = started
     for attempt in range(1, max_attempts + 1):
         run = openai_client.evals.runs.retrieve(eval_id=eval_id, run_id=run_id)
         status = getattr(run, "status", "unknown")
-        if status != last_status:
+        now = time.monotonic()
+        elapsed = now - started
+        status_changed = status != last_status
+        heartbeat_due = now - last_progress_at >= _DEFAULT_HEARTBEAT_SECONDS
+        if status_changed or heartbeat_due:
+            label = "run status ->" if status_changed else "still"
             progress(
-                f"cloud: run status -> {status} "
-                f"(attempt {attempt}/{max_attempts})"
+                f"cloud: {label} {status} "
+                f"(elapsed {_format_elapsed(elapsed)}, attempt {attempt}/{max_attempts})"
             )
+            last_progress_at = now
             last_status = status
         if status in _TERMINAL_STATUSES:
             return run
@@ -496,6 +728,14 @@ def _poll_until_terminal(
         f"{max_attempts} polls of {interval_seconds:g}s "
         f"(last status: {last_status!r})."
     )
+
+
+def _format_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes, remaining = divmod(total, 60)
+    if minutes:
+        return f"{minutes}m{remaining:02d}s"
+    return f"{remaining}s"
 
 
 def _friendly_run_create_error(

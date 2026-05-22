@@ -15,11 +15,16 @@ the new run against the baseline.
 - A Foundry prompt agent with deterministic smoke-test instructions.
 - A flat `agentops.yaml` at your project root.
 - A small JSONL dataset.
+- An `agentops eval analyze` triage before the first run.
 - A baseline `agentops eval run` producing `results.json` and `report.md`.
 - A second run compared against the baseline so the report shows prompt
   quality deltas.
 - A doctor analysis (`agentops doctor`) that surfaces
   regressions across the run history.
+- A production-readiness evidence pack (`agentops doctor --evidence-pack`)
+  that writes `evidence.json` and `evidence.md` for release review.
+- A trace-to-dataset preview (`agentops eval promote-traces`) that shows how
+  production conversations become reviewed regression rows.
 - A local Cockpit (`agentops cockpit`) that brings eval history,
   Doctor findings, CI/CD status, telemetry readiness, and Foundry/Azure
   navigation into one workspace view.
@@ -219,6 +224,7 @@ You still need to sign in once so the SDKs have a credential:
 
 ```powershell
 az login
+agentops eval analyze
 agentops eval run
 ```
 
@@ -229,6 +235,7 @@ classic environment-variable path still works:
 $env:AZURE_AI_FOUNDRY_PROJECT_ENDPOINT = "https://<resource>.services.ai.azure.com/api/projects/<project>"
 $env:AZURE_OPENAI_ENDPOINT = "https://<openai-resource>.openai.azure.com"
 $env:AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
+agentops eval analyze
 agentops eval run
 ```
 
@@ -258,6 +265,13 @@ Outputs:
 ```
 
 With `publish: false`, AgentOps writes only `results.json` and `report.md`. With `publish: true`, AgentOps also publishes to Foundry: `execution: local` uploads metrics to Classic Foundry; `execution: cloud` triggers a server-side run on New Foundry. Either way, `cloud_evaluation.json` records the portal URL.
+
+For `execution: cloud`, the local JSONL referenced by `dataset:` remains the
+source of truth. AgentOps syncs it to a stable Foundry dataset version by
+default, then uses that Foundry dataset in the Evals run. If you force
+`dataset_sync.mode: inline`, Foundry may display generated `eval-data-*`
+backing assets in **Data > Datasets**. The `cloud_evaluation.json` file includes
+a `dataset` block that explains this lineage.
 
 To view the report rendered (tables, ✅/❌), open it in VS Code and press `Ctrl+Shift+V`:
 
@@ -328,7 +342,7 @@ run before this one".
 
 So far the loop is reactive: someone ran an eval and decided whether the
 delta was acceptable. The **AgentOps doctor** is the AgentOps service
-that turns the same run history (plus the workspace, eval bundle, and  - 
+that turns the same run history (plus the workspace, eval bundle, and  -
 when configured - production telemetry) into a written report:
 severity-ranked findings with categories, summaries, and suggested fixes.
 It is **complementary** to Foundry **Operate → Compliance**, which
@@ -342,7 +356,7 @@ You already have at least two runs in `.agentops/results/` (the baseline
 and the comparison). Point the doctor at the workspace:
 
 ```powershell
-agentops doctor --workspace . --out .agentops/agent/report.md
+agentops doctor --workspace . --out .agentops/agent/report.md --evidence-pack
 ```
 
 It reads every run under `.agentops/results/`, applies the rules defined
@@ -352,6 +366,7 @@ Open it the same way as the eval report:
 
 ```powershell
 code .agentops/agent/report.md
+code .agentops/release/latest/evidence.md
 ```
 
 The CLI returns:
@@ -364,6 +379,41 @@ The CLI returns:
 The doctor is the bridge between "one eval ran" and "the project's
 quality is healthy". Wire `agentops doctor` into the CI workflow
 generated below to get the same view automatically on every PR.
+
+With `--evidence-pack`, Doctor also writes:
+
+```text
+.agentops/release/latest/
+├── evidence.json   # versioned release-readiness contract
+└── evidence.md     # reviewer-friendly release summary
+```
+
+The evidence status is a projection of existing signals, not a new gate:
+`ready`, `ready_with_warnings`, or `blocked`. Eval and Doctor exit codes remain
+unchanged, so CI behavior stays predictable.
+
+### Preview trace-to-dataset promotion
+
+Production traces become more valuable when high-signal conversations are
+reviewed and added back to your regression suite. If you export Foundry/App
+Insights traces as JSONL, preview candidate rows locally:
+
+```powershell
+agentops eval promote-traces --source .agentops/traces/sample-traces.jsonl
+```
+
+Use `--apply` only after reviewing the candidate rows:
+
+```powershell
+agentops eval promote-traces --source .agentops/traces/sample-traces.jsonl --apply
+```
+
+This writes `.agentops/data/trace-regression.jsonl` and
+`.agentops/data/trace-regression-manifest.json`. The default
+`self-similarity` mode stores the production response as `expected`, which is
+useful for drift detection but not human-verified truth. Use
+`--label-mode pending` when a reviewer should fill expected answers before the
+dataset gates releases.
 
 > **Tip - local Cockpit.** Every Doctor run appends a record to
 > `.agentops/agent/history.jsonl`. Run `agentops cockpit` in a separate
@@ -484,8 +534,12 @@ the only difference is the YAML dialect and where the files land.
 **GitHub Actions:**
 
 ```powershell
+agentops workflow analyze
 agentops workflow generate
 ```
+
+`workflow analyze` is the CI/CD triage step. It explains the recommended
+deploy mode before `workflow generate` writes files.
 
 writes:
 
@@ -501,6 +555,7 @@ writes:
 **Azure DevOps Pipelines:**
 
 ```powershell
+agentops workflow analyze
 agentops workflow generate --platform azure-devops
 ```
 
@@ -517,11 +572,22 @@ writes:
 
 Each workflow installs AgentOps, runs `agentops eval run`, uploads the
 results as a pipeline artifact, and (for the PR gate) posts the
-rendered `report.md` as an idempotent PR comment.
+rendered `report.md` plus release evidence as an idempotent PR comment.
+The PR, production deploy, and watchdog templates also run
+`agentops doctor --evidence-pack` so `.agentops/release/latest/evidence.*`
+is attached to the workflow artifacts.
 
-Deployment is azd-first. When `azure.yaml` exists, the default
-`--deploy-mode auto` writes deploy stages that call `azd provision` /
-`azd deploy`; otherwise it writes stack-agnostic placeholders.
+Deployment is azd-first. If you omit `--deploy-mode`, the default is `auto`.
+When `azure.yaml` exists, `auto` writes deploy stages that call
+`azd provision` / `azd deploy`; when `agentops.yaml` targets a Foundry prompt
+agent, it can use prompt-agent deployment; otherwise it writes stack-agnostic
+placeholders. The command output prints the effective mode, such as
+`Deploy mode: azd (auto default)`.
+
+If the repo is based on Azure AI Landing Zone and includes
+`scripts/Invoke-PreflightChecks.ps1`, azd deploy workflows run that official
+preflight with `-Strict` before provisioning. `agentops doctor` reports the same
+path as AI Landing Zone deployment readiness under Operational Excellence.
 
 For the quickstart you don't have to commit these files yet - opening
 them locally shows what AgentOps will run in CI:
@@ -537,7 +603,7 @@ Useful flags:
 |---|---|---|
 | `--platform` | `github` | `github` or `azure-devops`. |
 | `--kinds` | all five | Comma-separated subset, e.g. `--kinds pr,dev`. Use `--kinds pr` for the safest first commit. |
-| `--deploy-mode` | `auto` | `auto`, `azd`, or `placeholder`. `auto` uses azd when `azure.yaml` exists. |
+| `--deploy-mode` | `auto` | `auto`, `azd`, `prompt-agent`, or `placeholder`. Omit it for the safe default. |
 | `--force` | off | Overwrite existing workflow files. |
 | `--dir` | `.` | Repo root directory. |
 
@@ -706,4 +772,5 @@ evaluators:
 
 - [`docs/how-it-works.md`](how-it-works.md) - architecture and request flow.
 - [`docs/ci-github-actions.md`](ci-github-actions.md) - wire AgentOps into PR checks with OIDC auth.
+- [`docs/tutorial-production-readiness.md`](tutorial-production-readiness.md) - the POC-to-production journey with release evidence and trace regression.
 - The scenario tutorials use the same flat `agentops.yaml` workflow with more realistic datasets and targets.

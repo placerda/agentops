@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
 from agentops.core.agentops_config import (
     AgentOpsConfig,
+    DatasetSyncConfig,
     Threshold,
     classify_agent,
 )
@@ -140,6 +143,15 @@ class TestAgentOpsConfig:
         target = cfg.resolved_target()
         assert target.kind == "foundry_prompt"
 
+    def test_accepts_prompt_file_for_prompt_agent_cicd(self) -> None:
+        cfg = AgentOpsConfig(
+            version=1,
+            agent="my-rag:3",
+            dataset="./qa.jsonl",
+            prompt_file=".agentops/prompts/agent-instructions.md",
+        )
+        assert cfg.prompt_file == Path(".agentops/prompts/agent-instructions.md")
+
     def test_rejects_legacy_keys(self) -> None:
         with pytest.raises(ValidationError) as exc_info:
             AgentOpsConfig.model_validate(
@@ -214,6 +226,33 @@ class TestAgentOpsConfig:
         )
         assert cfg.publish is True
         assert cfg.publish_target() == "foundry_cloud"
+        assert cfg.dataset_sync.mode == "auto"
+
+    def test_dataset_sync_accepts_inline_mode(self) -> None:
+        cfg = AgentOpsConfig(
+            version=1,
+            agent="my-rag:3",
+            dataset="./qa.jsonl",
+            dataset_sync=DatasetSyncConfig(
+                mode="inline",
+                name="agentops-qa",
+                version="content-hash",
+            ),
+        )
+
+        assert cfg.dataset_sync.mode == "inline"
+        assert cfg.dataset_sync.name == "agentops-qa"
+
+    def test_dataset_sync_rejects_empty_name(self) -> None:
+        with pytest.raises(ValidationError, match="dataset_sync.name"):
+            AgentOpsConfig.model_validate(
+                {
+                    "version": 1,
+                    "agent": "my-rag:3",
+                    "dataset": "./qa.jsonl",
+                    "dataset_sync": {"mode": "inline", "name": " "},
+                }
+            )
 
     def test_cloud_execution_rejects_publish_false(self) -> None:
         """execution: cloud + publish: false is a contradiction."""

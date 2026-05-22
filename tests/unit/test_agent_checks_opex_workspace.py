@@ -30,6 +30,10 @@ def _ids(findings) -> set:
     return {f.id for f in findings}
 
 
+def _finding(findings, finding_id: str):
+    return next(f for f in findings if f.id == finding_id)
+
+
 # ---------------------------------------------------------------------------
 # no_deploy_workflow
 # ---------------------------------------------------------------------------
@@ -113,6 +117,73 @@ def test_results_not_gitignored_accepts_repo_root_gitignore(
     )
     findings = run_opex_workspace_check(workspace)
     assert "opex.results_not_gitignored" not in _ids(findings)
+
+
+# ---------------------------------------------------------------------------
+# AI Landing Zone deployment readiness
+# ---------------------------------------------------------------------------
+
+
+def test_ailz_readiness_emits_summary_and_aggregated_gaps(workspace: Path) -> None:
+    (workspace / "manifest.json").write_text(
+        '{"ailz_tag": "v2.0.0", "components": []}',
+        encoding="utf-8",
+    )
+    (workspace / "README.md").write_text(
+        "AI Landing Zone with network isolation and private endpoints.",
+        encoding="utf-8",
+    )
+
+    findings = run_opex_workspace_check(workspace)
+    ids = _ids(findings)
+
+    assert "opex.ailz_readiness" in ids
+    assert "opex.ailz_gaps" in ids
+    gaps = _finding(findings, "opex.ailz_gaps").evidence["gaps"]
+    assert any("preflight script" in gap for gap in gaps)
+    assert any("azd deploy workflow" in gap for gap in gaps)
+    assert any("CI runner" in gap for gap in gaps)
+
+
+def test_ailz_readiness_is_silent_for_vanilla_azd_project(workspace: Path) -> None:
+    (workspace / "azure.yaml").write_text("name: foundry-starter\n", encoding="utf-8")
+    (workspace / "infra").mkdir()
+    (workspace / "infra" / "main.bicep").write_text(
+        "resource app 'Microsoft.App/containerApps@2024-03-01' = {}\n",
+        encoding="utf-8",
+    )
+
+    findings = run_opex_workspace_check(workspace)
+
+    assert "opex.ailz_readiness" not in _ids(findings)
+    assert "opex.ailz_gaps" not in _ids(findings)
+
+
+def test_ailz_readiness_passes_when_path_is_wired(workspace: Path) -> None:
+    (workspace / "manifest.json").write_text(
+        '{"ailz_version": "2.0.0"}',
+        encoding="utf-8",
+    )
+    scripts = workspace / "scripts"
+    scripts.mkdir()
+    (scripts / "Invoke-PreflightChecks.ps1").write_text(
+        "Write-Host preflight\n",
+        encoding="utf-8",
+    )
+    workflows = workspace / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "agentops-deploy-dev.yml").write_text(
+        "runs-on: self-hosted\n"
+        "steps:\n"
+        "  - run: pwsh ./scripts/Invoke-PreflightChecks.ps1 -Strict\n"
+        "  - run: azd provision --no-prompt\n",
+        encoding="utf-8",
+    )
+
+    findings = run_opex_workspace_check(workspace)
+
+    assert "opex.ailz_readiness" in _ids(findings)
+    assert "opex.ailz_gaps" not in _ids(findings)
 
 
 # ---------------------------------------------------------------------------

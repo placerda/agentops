@@ -258,8 +258,13 @@ evaluator uses to judge selection and arguments.
 ## 6. Run the eval
 
 ```powershell
+agentops eval analyze
 agentops eval run
 ```
+
+For HTTP agents, `eval analyze` is useful before the first run because it calls
+out response-field mapping and dataset-shape issues before the endpoint becomes
+a CI gate.
 
 Expected outputs:
 
@@ -287,6 +292,7 @@ avoids the common mistake of pushing DEV/QA/PROD deploy workflows that
 immediately fail on `main`.
 
 ```powershell
+agentops workflow analyze
 agentops workflow generate --kinds pr --force
 ```
 

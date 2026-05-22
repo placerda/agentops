@@ -16,6 +16,7 @@ from agentops.core.results import (
     RunSummary,
     TargetInfo,
 )
+from agentops.core.agentops_config import DatasetSyncConfig
 from agentops.pipeline import cloud_runner
 
 
@@ -247,6 +248,36 @@ def test_poll_returns_when_status_completed():
     assert sleep.call_count == 2
 
 
+def test_poll_emits_elapsed_heartbeat_when_status_does_not_change():
+    """Long cloud runs should not look stuck when Foundry keeps one status."""
+    statuses = iter(["queued", "queued", "completed"])
+
+    def _retrieve(eval_id: str, run_id: str):
+        return SimpleNamespace(status=next(statuses))
+
+    fake_runs = SimpleNamespace(retrieve=_retrieve)
+    fake_evals = SimpleNamespace(runs=fake_runs)
+    fake_client = SimpleNamespace(evals=fake_evals)
+    progress_messages: list[str] = []
+
+    with mock.patch("agentops.pipeline.cloud_runner.time.sleep"):
+        with mock.patch(
+            "agentops.pipeline.cloud_runner.time.monotonic",
+            side_effect=[0.0, 0.0, 11.0, 12.0],
+        ):
+            run = cloud_runner._poll_until_terminal(
+                fake_client,
+                eval_id="e1", run_id="r1",
+                interval_seconds=0.0, max_attempts=10,
+                progress=progress_messages.append,
+            )
+
+    assert run.status == "completed"
+    assert any("run status -> queued" in msg for msg in progress_messages)
+    assert any("still queued" in msg and "elapsed 11s" in msg for msg in progress_messages)
+    assert any("run status -> completed" in msg for msg in progress_messages)
+
+
 def test_poll_times_out_when_never_terminal():
     """Hitting max_attempts raises a clear RuntimeError."""
 
@@ -344,9 +375,35 @@ class _FakeOpenAIClient:
         self.evals = _FakeEvals(statuses)
 
 
+class _FakeDatasets:
+    def __init__(self, *, fail_upload: bool = False, existing: dict | None = None):
+        self.fail_upload = fail_upload
+        self.existing = existing
+        self.get_calls: list = []
+        self.upload_calls: list = []
+
+    def get(self, *, name, version):
+        self.get_calls.append((name, version))
+        if self.existing is not None:
+            return self.existing
+        raise RuntimeError("not found")
+
+    def upload_file(self, *, name, version, file_path):
+        self.upload_calls.append((name, version, file_path))
+        if self.fail_upload:
+            raise RuntimeError("upload denied")
+        return {
+            "id": f"azureai://datasets/{name}/versions/{version}",
+            "name": name,
+            "version": version,
+            "dataUri": "https://storage.example/dataset.jsonl",
+        }
+
+
 class _FakeProjectClient:
-    def __init__(self, openai_client):
+    def __init__(self, openai_client, *, datasets: _FakeDatasets | None = None):
         self._openai = openai_client
+        self.datasets = datasets or _FakeDatasets()
 
     def get_openai_client(self):
         # NB: must be callable with NO arguments — we never want callers
@@ -358,7 +415,7 @@ def test_run_on_foundry_cloud_happy_path(dataset_file: Path):
     """End-to-end happy path with all Azure SDKs mocked.
 
     Verifies:
-    - dataset rows are inlined as file_content
+        - dataset rows are synced to Foundry and referenced as file_id
     - testing_criteria contain only mappable evaluators (coherence + fluency)
     - data_source carries an azure_ai_agent target with name + version
     - target is built from result.target (not the raw string)
@@ -415,21 +472,177 @@ def test_run_on_foundry_cloud_happy_path(dataset_file: Path):
     assert target["name"] == "support-bot"
     assert target["version"] == "1"
     assert data_source["input_messages"]["template"][0]["content"]["text"] == "{{item.input}}"
-    assert data_source["source"]["type"] == "file_content"
-    assert data_source["source"]["content"][0]["item"] == {
-        "input": "hi",
-        "expected": "hello",
-    }
+    assert data_source["source"]["type"] == "file_id"
+    assert data_source["source"]["id"].startswith(
+        "azureai://datasets/agentops-dataset/versions/sha256-"
+    )
 
     # Result captures status + portal URL.
     assert published.status == "completed"
     assert published.eval_id == "eval-123"
     assert published.run_id == "run-xyz"
     assert published.report_url == "https://ai.azure.com/foundry/runs/run-xyz"
+    assert published.dataset["mode"] == "foundry"
+    assert published.dataset["requested_mode"] == "auto"
+    assert published.dataset["source_type"] == "file_id"
+    assert published.dataset["foundry_name"] == "agentops-dataset"
+    assert published.dataset["foundry_id"].startswith("azureai://datasets/")
+    assert published.dataset["sha256"]
 
     # Progress messages went through.
-    assert any("prepared 2 row(s)" in m for m in progress_messages)
+    assert any("syncing dataset to Foundry" in m for m in progress_messages)
     assert any("status -> completed" in m for m in progress_messages)
+
+
+def test_run_on_foundry_cloud_inline_mode_uses_file_content(dataset_file: Path):
+    fake_openai = _FakeOpenAIClient(statuses=["queued", "completed"])
+    fake_project = _FakeProjectClient(fake_openai)
+    fake_projects_module = mock.MagicMock()
+    fake_projects_module.AIProjectClient = mock.MagicMock(return_value=fake_project)
+    fake_identity_module = mock.MagicMock()
+
+    with mock.patch.dict(
+        "sys.modules",
+        {
+            "azure.ai.projects": fake_projects_module,
+            "azure.identity": fake_identity_module,
+        },
+    ):
+        with mock.patch.dict(
+            "os.environ", {"AZURE_OPENAI_DEPLOYMENT": "gpt-4o-mini"}
+        ):
+            with mock.patch("agentops.pipeline.cloud_runner.time.sleep"):
+                published = cloud_runner.run_on_foundry_cloud(
+                    _make_result(),
+                    dataset_path=dataset_file,
+                    project_endpoint="https://contoso.services.ai.azure.com/api/projects/p",
+                    dataset_sync=DatasetSyncConfig(mode="inline"),
+                    poll_interval_seconds=0.0,
+                    max_poll_attempts=5,
+                )
+
+    data_source = fake_openai.evals.runs.created_with["data_source"]
+    assert data_source["source"]["type"] == "file_content"
+    assert data_source["source"]["content"][0]["item"] == {
+        "input": "hi",
+        "expected": "hello",
+    }
+    assert published.dataset["mode"] == "inline"
+    assert published.dataset["requested_mode"] == "inline"
+    assert "eval-data-*" in published.dataset["foundry_behavior"]
+
+
+def test_run_on_foundry_cloud_required_foundry_mode_does_not_fallback(dataset_file: Path):
+    fake_openai = _FakeOpenAIClient(statuses=["queued", "completed"])
+    fake_project = _FakeProjectClient(
+        fake_openai,
+        datasets=_FakeDatasets(fail_upload=True),
+    )
+    fake_projects_module = mock.MagicMock()
+    fake_projects_module.AIProjectClient = mock.MagicMock(return_value=fake_project)
+    fake_identity_module = mock.MagicMock()
+
+    with mock.patch.dict(
+        "sys.modules",
+        {
+            "azure.ai.projects": fake_projects_module,
+            "azure.identity": fake_identity_module,
+        },
+    ):
+        with pytest.raises(RuntimeError, match="upload denied"):
+            cloud_runner.run_on_foundry_cloud(
+                _make_result(),
+                dataset_path=dataset_file,
+                project_endpoint="https://contoso.services.ai.azure.com/api/projects/p",
+                dataset_sync=DatasetSyncConfig(mode="foundry"),
+            )
+
+
+def test_run_on_foundry_cloud_auto_falls_back_to_inline(dataset_file: Path):
+    fake_openai = _FakeOpenAIClient(statuses=["queued", "completed"])
+    fake_project = _FakeProjectClient(
+        fake_openai,
+        datasets=_FakeDatasets(fail_upload=True),
+    )
+    fake_projects_module = mock.MagicMock()
+    fake_projects_module.AIProjectClient = mock.MagicMock(return_value=fake_project)
+    fake_identity_module = mock.MagicMock()
+    progress_messages: list[str] = []
+
+    with mock.patch.dict(
+        "sys.modules",
+        {
+            "azure.ai.projects": fake_projects_module,
+            "azure.identity": fake_identity_module,
+        },
+    ):
+        with mock.patch.dict(
+            "os.environ", {"AZURE_OPENAI_DEPLOYMENT": "gpt-4o-mini"}
+        ):
+            with mock.patch("agentops.pipeline.cloud_runner.time.sleep"):
+                published = cloud_runner.run_on_foundry_cloud(
+                    _make_result(),
+                    dataset_path=dataset_file,
+                    project_endpoint="https://contoso.services.ai.azure.com/api/projects/p",
+                    poll_interval_seconds=0.0,
+                    max_poll_attempts=5,
+                    progress=progress_messages.append,
+                )
+
+    data_source = fake_openai.evals.runs.created_with["data_source"]
+    assert data_source["source"]["type"] == "file_content"
+    assert published.dataset["status"] == "auto_fallback_inline"
+    assert "upload denied" in published.dataset["sync_error"]
+    assert any("using inline rows" in m for m in progress_messages)
+
+
+def test_run_on_foundry_cloud_auto_fallback_summarizes_auth_noise(dataset_file: Path):
+    fake_openai = _FakeOpenAIClient(statuses=["completed"])
+    fake_project = _FakeProjectClient(
+        fake_openai,
+        datasets=_FakeDatasets(fail_upload=True),
+    )
+    noisy_auth_error = RuntimeError(
+        "DefaultAzureCredential failed to retrieve a token from the included credentials.\n"
+        "Attempted credentials:\n"
+        "\tEnvironmentCredential: unavailable.\n"
+        "\tAzureCliCredential: Failed to invoke the Azure CLI\n"
+        "\tAzurePowerShellCredential: Failed to invoke PowerShell."
+    )
+    fake_project.datasets.get = mock.MagicMock(side_effect=noisy_auth_error)
+    fake_projects_module = mock.MagicMock()
+    fake_projects_module.AIProjectClient = mock.MagicMock(return_value=fake_project)
+    fake_identity_module = mock.MagicMock()
+    progress_messages: list[str] = []
+
+    with mock.patch.dict(
+        "sys.modules",
+        {
+            "azure.ai.projects": fake_projects_module,
+            "azure.identity": fake_identity_module,
+        },
+    ):
+        with mock.patch.dict(
+            "os.environ", {"AZURE_OPENAI_DEPLOYMENT": "gpt-4o-mini"}
+        ):
+            with mock.patch("agentops.pipeline.cloud_runner.time.sleep"):
+                published = cloud_runner.run_on_foundry_cloud(
+                    _make_result(),
+                    dataset_path=dataset_file,
+                    project_endpoint="https://contoso.services.ai.azure.com/api/projects/p",
+                    poll_interval_seconds=0.0,
+                    max_poll_attempts=5,
+                    progress=progress_messages.append,
+                )
+
+    assert published.dataset["status"] == "auto_fallback_inline"
+    assert "DefaultAzureCredential" not in published.dataset["sync_error"]
+    assert "EnvironmentCredential" not in published.dataset["sync_error"]
+    assert "Azure authentication was unavailable" in published.dataset["sync_error"]
+    fallback_messages = [m for m in progress_messages if "dataset sync unavailable" in m]
+    assert fallback_messages
+    assert "EnvironmentCredential" not in fallback_messages[0]
+    assert "using inline rows" in fallback_messages[0]
 
 
 def test_run_on_foundry_cloud_raises_when_run_fails(dataset_file: Path):

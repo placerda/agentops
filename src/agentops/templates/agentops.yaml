@@ -20,6 +20,13 @@ agent: "my-agent:1"
 
 dataset: .agentops/data/smoke.jsonl
 
+# Optional. Source-controlled instructions file used by prompt-agent CI/CD.
+# Generated prompt-agent deploy workflows create a candidate Foundry version
+# from this file, evaluate that exact version, then record it as deployed only
+# after the gate passes.
+#
+# prompt_file: .agentops/prompts/agent-instructions.md
+
 # Optional. Override the auto-selected pass/fail thresholds. AgentOps fills in
 # sensible defaults for the metrics that are auto-selected.
 #

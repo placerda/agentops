@@ -16,6 +16,9 @@ agent: "my-rag:1"
 
 dataset: ./dataset.jsonl
 
+# Optional for Foundry prompt-agent CI/CD:
+# prompt_file: .agentops/prompts/agent-instructions.md
+
 # Optional thresholds (override the auto-selected defaults):
 # thresholds:
 #   coherence: ">=3"

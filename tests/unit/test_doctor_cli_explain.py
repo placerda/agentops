@@ -35,6 +35,8 @@ def test_doctor_help_is_terse_and_exposes_options() -> None:
         "--exclude-rules",
         "--no-preflight",
         "--strict-preflight",
+        "--evidence-pack",
+        "--evidence-out",
     ):
         assert flag in stripped, f"missing analyzer flag {flag} in doctor --help"
 
@@ -75,6 +77,10 @@ def test_doctor_explain_renders_manual_sections_without_pager() -> None:
     assert "Doctor first looks for the active AZD environment" in stripped
     assert "regression.<metric>" in stripped
     assert "responsible_ai.llm.prompt_transparency" in stripped
+    assert "[Source-based] regression.<metric>" in stripped
+    assert "[LLM Judge] responsible_ai.llm.prompt_transparency" in stripped
+    assert "mode: Source-based (no judge model call)" in stripped
+    assert "mode: LLM Judge (opt-in; uses configured judge model)" in stripped
     assert "learn more: https://learn.microsoft.com/azure/well-architected/ai/responsible-ai" in stripped
     assert "agentops doctor list" not in stripped
 
@@ -104,6 +110,9 @@ def test_doctor_explain_can_write_markdown(tmp_path) -> None:
     assert text.startswith("# AgentOps Doctor manual")
     assert "## DATA SOURCES" in text
     assert "`azure_resources`" in text
+    assert "**Legend:** `LLM Judge` calls the configured judge model" in text
+    assert "#### [LLM Judge] `responsible_ai.llm.prompt_transparency`" in text
+    assert "**Mode:** Source-based (no judge model call)" in text
     assert "agentops doctor explain --open" in text
 
 
@@ -123,7 +132,8 @@ def test_doctor_explain_can_write_html(tmp_path) -> None:
     assert "<h2>DATA SOURCES</h2>" in html
     assert "<table>" in html
     assert '<article class="check-card">' in html
-    assert '<h4><code>errors.production_rate</code></h4>' in html
+    assert '<h4>[Source-based] <code>errors.production_rate</code></h4>' in html
+    assert '<h4>[LLM Judge] <code>responsible_ai.llm.prompt_transparency</code></h4>' in html
     assert "background: #eef6ff" in html
     assert "border-left: 3px solid #8cbeff" in html
 
