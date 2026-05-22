@@ -3,9 +3,30 @@
 All notable changes to this project will be documented in this file.
 This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-05-22
+
+### Added
+- **Release evidence packs.** Added the release evidence schema and Doctor
+  evidence-pack writer so teams can produce review-ready production promotion
+  artifacts from existing readiness signals.
+- **Trace promotion workflow.** Added trace export promotion into reviewable
+  dataset candidates so production learnings can become future regression
+  coverage.
+- **Workflow analysis and prompt-agent deployment templates.** Added CI/CD
+  analysis plus GitHub Actions and Azure DevOps templates for prompt-agent
+  deployment paths.
+- **Production readiness guidance.** Added the production readiness tutorial
+  and release-readiness Doctor checks to connect evaluation gates, evidence,
+  and deployment readiness.
+- **Pre-flight checks for `agentops eval run`** - detects common issues (missing `azure-identity` or `azure-ai-evaluation` packages, missing env vars for AI-assisted/safety evaluators, Azure credential failures, unreachable endpoints) *before* backend execution. All detectable issues are reported at once with actionable error messages and `pip install` hints.
+- **`--dry-run` / `-n` flag on `eval run`** - runs pre-flight checks without executing the evaluation. Exits 0 if all checks pass, 1 otherwise. Useful for CI gating and fast feedback.
+- **Credential warm-up in pre-flight** - acquires and caches the MSAL token once during pre-flight so subsequent evaluator calls don't each cold-start `az.cmd`.
 
 ### Changed
+- **AgentOps 1.0 workspace and documentation refresh.** Updated the CLI,
+  templates, skills, examples, and docs around the flat `agentops.yaml`
+  workflow, azd-compatible initialization, Doctor/Cockpit readiness, and
+  production evaluation loops.
 - **`AZURE_OPENAI_ENDPOINT` is now auto-normalized.** When the env
   var includes the portal-style inference-path suffix
   (e.g. `https://<resource>.openai.azure.com/openai/v1`,
@@ -14,8 +35,6 @@ This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres 
   `openai` client. Trailing slashes are also trimmed. The user can
   paste whichever URL the Foundry portal showed and the eval
   pipeline now works transparently.
-
-### Changed
 - **Doctor categories aligned to WAF-AI pillars (breaking).** The
   `genaiops` category was renamed to `operational_excellence` to match
   the Microsoft Well-Architected Framework for AI pillar names. Every
@@ -28,17 +47,8 @@ This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres 
   rewrites legacy `genaiops.*` rule ids in
   `checks.llm_assist.rules` and legacy `--categories genaiops` flags
   in memory at load time with a one-shot deprecation warning; update
-  your config to the canonical names — the legacy aliases will be
+  your config to the canonical names - the legacy aliases will be
   removed in a future release.
-
-## [0.1.8] - 2026-04-22
-
-### Added
-- **Pre-flight checks for `agentops eval run`** - detects common issues (missing `azure-identity` or `azure-ai-evaluation` packages, missing env vars for AI-assisted/safety evaluators, Azure credential failures, unreachable endpoints) *before* backend execution. All detectable issues are reported at once with actionable error messages and `pip install` hints.
-- **`--dry-run` / `-n` flag on `eval run`** - runs pre-flight checks without executing the evaluation. Exits 0 if all checks pass, 1 otherwise. Useful for CI gating and fast feedback.
-- **Credential warm-up in pre-flight** - acquires and caches the MSAL token once during pre-flight so subsequent evaluator calls don't each cold-start `az.cmd`.
-
-### Changed
 - **Azure CLI credential timeout raised to 30s** - all `DefaultAzureCredential` instantiation sites (`eval_engine.py`, `foundry_backend.py`) now pass `process_timeout=30`. Default (10s) is insufficient for Windows `az.cmd` cold starts and was causing intermittent `AzureCliCredential: Failed to invoke the Azure CLI` errors.
 
 ## [0.1.7] - 2026-04-21
