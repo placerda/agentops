@@ -45,6 +45,8 @@ with Foundry Toolkit, Azure Container Apps, AKS, or another hosting path.
 
 ```powershell
 @'
+import os
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -56,6 +58,9 @@ class ChatRequest(BaseModel):
 
 
 def plan_trip(message: str) -> str:
+    if os.getenv("TRAVEL_AGENT_MODE") == "regressed":
+        return "Travel depends on your preference. Search online and pick what looks best."
+
     text = message.lower()
     if "lisbon" in text:
         return (
@@ -164,6 +169,8 @@ You need:
 | Response field | `text` |
 | Bearer token env var | optional, for example `HOSTED_AGENT_TOKEN` |
 | Foundry project endpoint | optional, but recommended for links and evaluators |
+| Azure OpenAI endpoint | `https://<resource>.openai.azure.com`, used later by local AI-assisted evaluators |
+| Evaluator model deployment | `gpt-4o-mini`, used later by local AI-assisted evaluators |
 | Application Insights connection string | optional, but recommended |
 
 If the deployed endpoint needs a bearer token:
@@ -172,17 +179,23 @@ If the deployed endpoint needs a bearer token:
 $env:HOSTED_AGENT_TOKEN = "<token>"
 ```
 
-## 5. Initialize AgentOps
+## 5. Initialize AgentOps interactively
 
 ```powershell
-agentops init `
-  --dir . `
-  --azd-env dev `
-  --project-endpoint "https://<resource>.services.ai.azure.com/api/projects/<project>" `
-  --agent "$env:TRAVEL_AGENT_ENDPOINT" `
-  --dataset ".agentops/data/travel-smoke.jsonl" `
-  --no-prompt
+agentops init
 ```
+
+Answer the prompts as the wizard asks them:
+
+| Prompt | Answer |
+|---|---|
+| Foundry project endpoint | `https://<resource>.services.ai.azure.com/api/projects/<project>`, or press Enter if you are only testing the local endpoint |
+| Agent | The value in `$env:TRAVEL_AGENT_ENDPOINT`, for example `http://127.0.0.1:8000/chat` |
+| Dataset path | `.agentops/data/travel-smoke.jsonl` |
+| Application Insights connection string | Paste it if you have one, or press Enter to let AgentOps auto-discover/leave it blank |
+
+If you want an azd environment name other than the default `dev`, run
+`agentops init --azd-env <name>`.
 
 Then edit `agentops.yaml` so AgentOps knows how to call the endpoint:
 
@@ -190,11 +203,13 @@ Then edit `agentops.yaml` so AgentOps knows how to call the endpoint:
 version: 1
 agent: http://127.0.0.1:8000/chat
 dataset: .agentops/data/travel-smoke.jsonl
-project_endpoint: https://<resource>.services.ai.azure.com/api/projects/<project>
 protocol: http-json
 request_field: message
 response_field: text
 ```
+
+The Foundry project endpoint and App Insights connection string live in
+`.azure/dev/.env`, not in source control.
 
 For a deployed endpoint protected by a bearer token, add:
 
@@ -233,10 +248,19 @@ invoke the endpoint, normalize results, apply thresholds, and keep a stable
 
 ## 7. Run a local eval
 
+Local AI-assisted evaluators need a judge model deployment. This is separate
+from `agentops init`: initialization captures the workspace target, while this
+environment configuration tells the evaluator which model to use.
+
+```powershell
+$env:AZURE_OPENAI_ENDPOINT = "https://<resource>.openai.azure.com"
+$env:AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
+```
+
 ```powershell
 agentops eval analyze
-agentops eval run --output .agentops/results/manual-hosted-smoke
-code .agentops/results/manual-hosted-smoke/report.md
+agentops eval run --output .agentops\results\manual-hosted-smoke
+code .agentops\results\manual-hosted-smoke\report.md
 ```
 
 The run writes:
@@ -247,22 +271,69 @@ The run writes:
 .agentops/results/latest/
 ```
 
-## 8. Generate CI and Doctor evidence
+## 8. Force an endpoint regression, compare, then fix it
+
+The sample endpoint includes a deliberate regression switch. Stop the server in
+the second terminal, restart it in regressed mode, and run a comparison against
+the good baseline:
+
+```powershell
+$env:TRAVEL_AGENT_MODE = "regressed"
+python -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+From the first terminal:
+
+```powershell
+agentops eval run `
+  --baseline .agentops\results\manual-hosted-smoke `
+  --output .agentops\results\regressed-hosted
+code .agentops\results\regressed-hosted\report.md
+```
+
+The report should show that the vague response lost quality against the travel
+dataset. Now stop the server, remove the regression switch, restart it, and run
+the comparison again:
+
+```powershell
+Remove-Item Env:\TRAVEL_AGENT_MODE -ErrorAction SilentlyContinue
+python -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+```powershell
+agentops eval run `
+  --baseline .agentops\results\regressed-hosted `
+  --output .agentops\results\fixed-hosted
+code .agentops\results\fixed-hosted\report.md
+```
+
+This is the core AgentOps loop for hosted endpoints: keep a stable dataset,
+compare a changed runtime against the last known result, fix the agent, and
+rerun the same gate before a PR or release.
+
+## 9. Generate CI and Doctor evidence
 
 ```powershell
 agentops workflow generate --kinds pr,watchdog --force
 agentops doctor --workspace . --evidence-pack
-code .agentops/release/latest/evidence.md
+code .agentops\agent\report.md
+code .agentops\release\latest\evidence.md
 ```
 
 The generated PR gate runs `agentops eval run`. Before using that workflow in
 GitHub Actions or Azure Pipelines, replace any localhost agent URL with the
 deployed Foundry Hosted or cloud endpoint.
 
+Open both Doctor outputs. The report explains the findings; the evidence pack
+summarizes what a reviewer needs to decide whether the endpoint is releasable.
+In a fresh quickstart, warnings about production telemetry, CI history, or trace
+regression history are expected and useful: they show what remains before this
+local endpoint becomes an operated service.
+
 The watchdog workflow runs Doctor on a schedule so release evidence can include
 recent readiness signals.
 
-## 9. Open Cockpit
+## 10. Open Cockpit
 
 ```powershell
 agentops cockpit --workspace .
@@ -278,6 +349,8 @@ You are done when:
 - The Travel Agent endpoint responds to `POST /chat`.
 - `agentops workflow analyze` selects `agentops-local`.
 - `agentops eval run` writes `results.json` and `report.md`.
+- You forced the endpoint into regressed mode, compared it with the baseline,
+  fixed it, and reran the comparison.
 - `agentops doctor --evidence-pack` writes
   `.agentops/release/latest/evidence.md`.
 - Cockpit opens and shows the local eval history plus Doctor readiness.

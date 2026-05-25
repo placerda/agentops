@@ -40,7 +40,7 @@ review.
   - Prompt agent: `travel-agent:<version>`, or
   - Hosted/HTTP endpoint: `http://127.0.0.1:8000/chat` locally or a deployed
     HTTPS endpoint for CI.
-- One Azure OpenAI deployment for evaluator calls.
+- One Azure OpenAI deployment for evaluator calls, for example `gpt-4o-mini`.
 - Application Insights connected to the Foundry project or agent runtime.
 
 Install AgentOps in a clean workshop workspace:
@@ -62,11 +62,9 @@ published package, use:
 python -m pip install "agentops-toolkit[foundry,agent] @ git+https://github.com/Azure/agentops.git@main"
 ```
 
-Set the evaluator deployment:
-
-```powershell
-$env:AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
-```
+You will provide the target values through the interactive `agentops init`
+wizard. The evaluator endpoint/deployment is separate: set it only when running
+local evals or configuring CI variables.
 
 ## 1. Create the Travel Agent target
 
@@ -109,6 +107,8 @@ Foundry Toolkit, Azure Container Apps, AKS, or your normal platform.
 
 ```powershell
 @'
+import os
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -120,6 +120,9 @@ class ChatRequest(BaseModel):
 
 
 def plan_trip(message: str) -> str:
+    if os.getenv("TRAVEL_AGENT_MODE") == "regressed":
+        return "Travel depends on your preference. Search online and pick what looks best."
+
     text = message.lower()
     if "lisbon" in text:
         return (
@@ -209,19 +212,24 @@ New-Item -ItemType Directory -Force .agentops\data | Out-Null
 '@ | Set-Content -Encoding utf8 .agentops\data\travel-smoke.jsonl
 ```
 
-## 3. Initialize the repo-side release contract
-
-Use the target you set in `TRAVEL_AGENT_TARGET`:
+## 3. Initialize the repo-side release contract interactively
 
 ```powershell
-agentops init `
-  --dir . `
-  --azd-env dev `
-  --project-endpoint "https://<resource>.services.ai.azure.com/api/projects/<project>" `
-  --agent "$env:TRAVEL_AGENT_TARGET" `
-  --dataset ".agentops/data/travel-smoke.jsonl" `
-  --no-prompt
+agentops init
 ```
+
+Answer the prompts as the wizard asks them:
+
+| Prompt | Answer |
+|---|---|
+| Foundry project endpoint | `https://<resource>.services.ai.azure.com/api/projects/<project>` |
+| Agent | The value in `$env:TRAVEL_AGENT_TARGET`, such as `travel-agent:1` or `http://127.0.0.1:8000/chat` |
+| Dataset path | `.agentops/data/travel-smoke.jsonl` |
+| Application Insights connection string | Paste it if you have one, or press Enter to let AgentOps auto-discover/leave it blank |
+
+The wizard saves `agent` and `dataset` to `agentops.yaml`. It saves the Foundry
+project endpoint and App Insights connection string to `.azure/dev/.env`, which
+is git-ignored and compatible with azd.
 
 For a hosted HTTP endpoint, add the endpoint protocol fields:
 
@@ -257,9 +265,14 @@ models, unsupported evaluator mappings, and repo-specific threshold evidence.
 For hosted agents or local fallback:
 
 ```powershell
+$env:AZURE_OPENAI_ENDPOINT = "https://<resource>.openai.azure.com"
+$env:AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
+```
+
+```powershell
 agentops eval analyze
-agentops eval run --output .agentops/results/manual-smoke
-code .agentops/results/manual-smoke/report.md
+agentops eval run --output .agentops\results\manual-smoke
+code .agentops\results\manual-smoke\report.md
 ```
 
 For prompt agents, generate the workflow and let CI call the official runner:
@@ -267,6 +280,15 @@ For prompt agents, generate the workflow and let CI call the official runner:
 ```powershell
 agentops workflow generate --kinds pr --force
 ```
+
+Before running that workflow, set the CI variable:
+
+```text
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
+```
+
+This value is not an `agentops init` answer. It tells the official eval runner
+which model deployment should judge responses.
 
 The generated workflow prepares official eval input under:
 
@@ -276,7 +298,78 @@ The generated workflow prepares official eval input under:
 
 and records release evidence after the gate.
 
-## 6. Add CI/CD gates
+## 6. Force a regression and recover
+
+Run one deliberate failure before you build the release path. It makes the
+workshop concrete: you compare a worse agent against a known-good run, fix it,
+and rerun the same gate.
+
+### Prompt Agent regression
+
+1. In Foundry, edit the `travel-agent` instructions to this intentionally bad
+   version:
+
+   ```text
+   Answer travel questions in one vague sentence. Do not include day-by-day
+   plans, practical notes, constraints, or booking caveats.
+   ```
+
+2. Publish it as the next version, for example `travel-agent:2`.
+3. Re-run the wizard and update only the agent value:
+
+   ```powershell
+   agentops init --reconfigure
+   ```
+
+   Keep the same project endpoint and dataset, but answer `Agent` with the
+   regressed version.
+4. Run the generated PR workflow. In Foundry Evaluations and the workflow
+   summary, compare the regressed run with the previous prompt version. The
+   vague prompt should lose quality because it no longer satisfies the travel
+   dataset.
+5. Restore the original Travel Agent instructions, publish again as a fixed
+   version such as `travel-agent:3`, re-run `agentops init --reconfigure`, and
+   run the pipeline again.
+
+This exercises Foundry prompt versioning, the official AI Agent Evaluation
+runner, and AgentOps evidence for the exact version under release review.
+
+### Hosted/HTTP regression
+
+The sample endpoint has a regression switch. Stop the server, restart it in
+regressed mode, and compare it with the first run:
+
+```powershell
+$env:TRAVEL_AGENT_MODE = "regressed"
+python -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+```powershell
+agentops eval run `
+  --baseline .agentops\results\manual-smoke `
+  --output .agentops\results\regressed
+code .agentops\results\regressed\report.md
+```
+
+The report should show lower quality or threshold movement. Now stop the server,
+remove the regression switch, restart it, and compare the fixed run:
+
+```powershell
+Remove-Item Env:\TRAVEL_AGENT_MODE -ErrorAction SilentlyContinue
+python -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+```powershell
+agentops eval run `
+  --baseline .agentops\results\regressed `
+  --output .agentops\results\fixed
+code .agentops\results\fixed\report.md
+```
+
+This exercises the AgentOps local runner, baseline comparison, normalized
+`results.json`, and the same fix-rerun loop you put behind a PR gate.
+
+## 7. Add CI/CD gates
 
 Generate the common release path:
 
@@ -290,7 +383,7 @@ The generated workflows are intentionally boring:
 - Dev/QA/Prod: deploy with azd or placeholders, then run readiness checks.
 - Watchdog: run Doctor on a schedule and upload the report.
 
-## 7. Wire observability
+## 8. Wire observability
 
 Foundry and Azure Monitor own live observability. AgentOps only checks whether
 the repo and runtime are wired to those signals.
@@ -312,7 +405,7 @@ For custom hosted runtimes, install the `[agent]` extra and configure Azure
 Monitor OpenTelemetry in the app startup. In Foundry, use the Observability
 pages for trace drilldown, metrics, and Ask AI analysis.
 
-## 8. Run Doctor and create release evidence
+## 9. Run Doctor and create release evidence
 
 ```powershell
 agentops doctor --workspace . --evidence-pack
@@ -320,8 +413,12 @@ code .agentops\agent\report.md
 code .agentops\release\latest\evidence.md
 ```
 
-The evidence pack is not a second gate. It is a release summary over existing
-signals:
+Open both files. The Doctor report is the diagnostic view: it tells you which
+signals are present, which are missing, and whether the finding is blocking or
+informational. The evidence pack is the reviewer view: it turns those signals
+into a concise release artifact.
+
+The evidence pack is not a second gate. It summarizes existing signals:
 
 - eval gate status;
 - Doctor findings;
@@ -330,7 +427,12 @@ signals:
 - trace-regression status;
 - links back to Foundry and Azure Monitor.
 
-## 9. Run Foundry red-team scans
+In a fresh workshop, some findings should still be missing: production telemetry
+may not have live traffic, scheduled workflows may not have history, and trace
+regression candidates may not exist yet. That is useful tutorial feedback, not
+a failure of Doctor.
+
+## 10. Run Foundry red-team scans
 
 Red-team scans are a Foundry capability. Run them from Foundry Observability /
 Red Teaming or the official Foundry SDK path. AgentOps does not create or run
@@ -350,7 +452,7 @@ agentops doctor --workspace . --evidence-pack
 Cockpit links back to Foundry Red Teaming so reviewers can drill into the
 managed scan results.
 
-## 10. Promote production traces into regression candidates
+## 11. Promote production traces into regression candidates
 
 Export reviewed Foundry or Application Insights traces to JSON/JSONL. Preview
 the conversion first:
@@ -371,7 +473,7 @@ This writes reviewable regression candidates under `.agentops/data/`. AgentOps
 does not claim they are human-approved truth. They are candidates until the team
 reviews and accepts them.
 
-## 11. Open Cockpit
+## 12. Open Cockpit
 
 ```powershell
 agentops cockpit --workspace .
@@ -395,6 +497,8 @@ You are ready for a release review when:
 - The agent target is explicit in `agentops.yaml`.
 - CI uses the expected runner for the target.
 - Eval results or official eval metadata are attached to the workflow artifact.
+- The workshop includes one deliberate regression and one fixed rerun, either
+  through Foundry prompt versions or AgentOps local baseline comparison.
 - `agentops doctor --evidence-pack` writes `evidence.md`.
 - Application Insights is connected or the evidence clearly says it is missing.
 - Foundry red-team scans are linked or tracked as a release action.

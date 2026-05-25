@@ -106,29 +106,30 @@ You need:
 |---|---|
 | Foundry project endpoint | `https://<resource>.services.ai.azure.com/api/projects/<project>` |
 | Prompt agent reference | `travel-agent:1` or the version Foundry published |
-| Evaluator model deployment | `gpt-4o-mini` |
 | Application Insights connection string | optional, but recommended |
 
-Set the deployment used by evaluators:
+You do not need to set an evaluator deployment before initialization.
+`agentops init` collects the workspace values. The evaluator deployment is a
+CI/local-eval setting you add later when a runner needs a judge model.
+
+## 5. Initialize AgentOps interactively
 
 ```powershell
-$env:AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
+agentops init
 ```
 
-## 5. Initialize AgentOps
+Answer the prompts as the wizard asks them:
 
-```powershell
-agentops init `
-  --dir . `
-  --azd-env dev `
-  --project-endpoint "https://<resource>.services.ai.azure.com/api/projects/<project>" `
-  --agent "travel-agent:1" `
-  --dataset ".agentops/data/travel-smoke.jsonl" `
-  --no-prompt
-```
+| Prompt | Answer |
+|---|---|
+| Foundry project endpoint | `https://<resource>.services.ai.azure.com/api/projects/<project>` |
+| Agent | `travel-agent:1`, or the exact published version from Foundry |
+| Dataset path | `.agentops/data/travel-smoke.jsonl` |
+| Application Insights connection string | Paste it if you have one, or press Enter to let AgentOps auto-discover/leave it blank |
 
-If your published agent version is not `1`, replace `travel-agent:1` with the
-exact value from Foundry.
+The interactive path is intentional: you see what each value means, and each
+answer is saved as soon as it validates. If you want an azd environment name
+other than the default `dev`, run `agentops init --azd-env <name>`.
 
 This creates:
 
@@ -145,8 +146,10 @@ agentops.yaml
 version: 1
 agent: travel-agent:1
 dataset: .agentops/data/travel-smoke.jsonl
-project_endpoint: https://<resource>.services.ai.azure.com/api/projects/<project>
 ```
+
+The Foundry project endpoint and App Insights connection string live in
+`.azure/dev/.env`, not in source control.
 
 ## 6. Check the selected eval runner
 
@@ -169,6 +172,16 @@ for the eval step, then uses AgentOps to collect evidence and readiness signals.
 agentops workflow generate --kinds pr,watchdog --force
 ```
 
+Before you run the generated workflow in GitHub Actions or Azure Pipelines, set
+the evaluator deployment as a CI variable:
+
+```text
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
+```
+
+That variable is not an `agentops init` answer. It tells the official eval
+runner which model deployment should judge responses.
+
 The PR workflow should contain the official eval action:
 
 ```text
@@ -183,18 +196,61 @@ It also records:
 .agentops/release/latest/evidence.md
 ```
 
-## 8. Run Doctor and create release evidence locally
+## 8. Force a prompt regression, then fix it
+
+This step makes the quickstart more than a happy path. You will intentionally
+ship a worse prompt, watch the eval gate or metrics move, then recover.
+
+1. In Foundry, edit the `travel-agent` instructions to this intentionally bad
+   version:
+
+   ```text
+   Answer travel questions in one vague sentence. Do not include day-by-day
+   plans, practical notes, constraints, or booking caveats.
+   ```
+
+2. Publish it as the next version, for example `travel-agent:2`.
+3. Re-run the wizard and update only the agent value:
+
+   ```powershell
+   agentops init --reconfigure
+   ```
+
+   Keep the same endpoint and dataset, but answer `Agent` with the regressed
+   version such as `travel-agent:2`.
+4. Run the PR workflow, or run the official eval step from your pipeline branch.
+   In Foundry Evaluations and the workflow summary, compare the new run with the
+   previous `travel-agent:1` run. The regressed prompt should lose quality
+   because it no longer satisfies the dataset expectations.
+5. Restore the original Travel Agent instructions from step 1, publish again
+   as the next version, for example `travel-agent:3`.
+6. Re-run `agentops init --reconfigure`, set `Agent` to the fixed version, and
+   run the pipeline again.
+
+The learning loop is the point: Foundry owns prompt versioning and the managed
+evaluation run; AgentOps keeps the repo pointed at the exact version under
+review and records the evidence for the release discussion.
+
+## 9. Run Doctor and create release evidence locally
 
 ```powershell
 agentops doctor --workspace . --evidence-pack
-code .agentops/release/latest/evidence.md
+code .agentops\agent\report.md
+code .agentops\release\latest\evidence.md
 ```
 
-Doctor is read-only. It checks whether the repo has the signals a release
-reviewer needs: eval gates, telemetry wiring, CI, trace-regression readiness,
-and links back to Foundry where Foundry owns the runtime view.
+Open both files. The Doctor report explains what is ready and what is missing;
+the evidence pack is the reviewer-friendly summary. In a fresh quickstart it is
+normal to see warnings for production telemetry, scheduled CI, or trace
+regression history. Those warnings are useful because they show the difference
+between "the eval ran once" and "this agent has enough release evidence."
 
-## 9. Open Cockpit
+Doctor is read-only. It does not create Foundry resources or run red-team scans.
+It checks whether the repo has the signals a release reviewer needs: eval gates,
+telemetry wiring, CI, trace-regression readiness, and links back to Foundry
+where Foundry owns the runtime view.
+
+## 10. Open Cockpit
 
 ```powershell
 agentops cockpit --workspace .
@@ -212,6 +268,8 @@ You are done when:
 - `agentops workflow analyze` selects `official-ai-agent-evaluation`.
 - `agentops workflow generate` creates a PR workflow with
   `microsoft/ai-agent-evals@v3-beta`.
+- You published a deliberately regressed prompt version, saw the eval/pipeline
+  signal move, restored the prompt, and reran the gate.
 - `agentops doctor --evidence-pack` writes
   `.agentops/release/latest/evidence.md`.
 - Cockpit opens and links the repo-side readiness view back to Foundry.

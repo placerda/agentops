@@ -12,6 +12,9 @@ This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres 
 - Made the quickstarts self-contained around a Travel Agent example, including
   prompt-agent creation, hosted HTTP endpoint creation, and travel-specific
   eval datasets without local workspace install paths.
+- Updated the tutorials to prefer the interactive `agentops init` wizard,
+  explain evaluator deployment separately from initialization, and include
+  forced regression/fix loops for prompt and hosted agent paths.
 
 ## [0.2.0] - 2026-05-22
 
