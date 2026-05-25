@@ -9,6 +9,9 @@ This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres 
 - Consolidated the tutorial set into two quickstarts plus one end-to-end
   Foundry + AgentOps workshop, with the quickstarts now covering the broader
   Foundry build/debug/evaluate/observe journey before AgentOps readiness.
+- Made the quickstarts self-contained around a Travel Agent example, including
+  prompt-agent creation, hosted HTTP endpoint creation, and travel-specific
+  eval datasets without local workspace install paths.
 
 ## [0.2.0] - 2026-05-22
 

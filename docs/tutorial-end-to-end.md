@@ -36,22 +36,30 @@ review.
 
 - Azure CLI signed in with access to a Foundry project.
 - A Foundry project endpoint.
-- One agent target:
-  - Prompt agent: `name:version`, or
-  - Hosted/HTTP endpoint: `https://...`.
+- Access to create one Travel Agent target:
+  - Prompt agent: `travel-agent:<version>`, or
+  - Hosted/HTTP endpoint: `http://127.0.0.1:8000/chat` locally or a deployed
+    HTTPS endpoint for CI.
 - One Azure OpenAI deployment for evaluator calls.
 - Application Insights connected to the Foundry project or agent runtime.
 
-Install from the local repo while validating changes:
+Install AgentOps in a clean workshop workspace:
 
 ```powershell
-mkdir C:\Users\paulolacerda\workspace\test-agentops-workshop
-cd C:\Users\paulolacerda\workspace\test-agentops-workshop
+mkdir agentops-workshop
+cd agentops-workshop
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
-python -m pip install -e "C:\Users\paulolacerda\workspace\agentops[foundry,agent]"
+python -m pip install "agentops-toolkit[foundry,agent]" fastapi "uvicorn[standard]"
 az login
+```
+
+If you need the latest unreleased changes from the repository instead of the
+published package, use:
+
+```powershell
+python -m pip install "agentops-toolkit[foundry,agent] @ git+https://github.com/Azure/agentops.git@main"
 ```
 
 Set the evaluator deployment:
@@ -60,14 +68,127 @@ Set the evaluator deployment:
 $env:AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
 ```
 
-## 1. Build or select the agent
+## 1. Create the Travel Agent target
 
-Use the official tool that matches the agent lifecycle:
+Choose one path. The rest of the workshop works with either target.
 
-| Agent type | Recommended creation path | AgentOps role |
-|---|---|---|
-| Prompt agent | Foundry portal, Foundry SDK, Foundry Toolkit, or Foundry Skills | Track `agent: name:version` and route CI to official eval |
-| Hosted agent | Foundry Toolkit, azd, Docker, ACA, AKS, or custom platform | Track endpoint URL and run local eval gates |
+### Option A: create a Prompt Agent in Foundry
+
+1. Open the [Azure AI Foundry portal](https://ai.azure.com) and select your
+   project.
+2. Create a prompt-based agent named `travel-agent`.
+3. Use `gpt-4o-mini` or another chat-capable deployment in the project.
+4. Paste these instructions:
+
+   ```text
+   You are Travel Agent, a concise travel planning assistant.
+
+   Help users plan short leisure trips. Always include:
+   - a short summary;
+   - a day-by-day plan when the user asks for an itinerary;
+   - practical notes about budget, transit, weather, or booking constraints;
+   - a reminder that you cannot make live reservations or purchases.
+
+   Ask one clarifying question only when the destination, duration, or traveler
+   preference is missing. Do not invent booking confirmations, prices, or
+   availability.
+   ```
+
+5. Save and publish the agent.
+6. Set the target reference. Replace `1` if Foundry published a different
+   version:
+
+   ```powershell
+   $env:TRAVEL_AGENT_TARGET = "travel-agent:1"
+   ```
+
+### Option B: create a Hosted/HTTP Travel Agent endpoint
+
+Create a minimal HTTP agent you can run locally first and later deploy with
+Foundry Toolkit, Azure Container Apps, AKS, or your normal platform.
+
+```powershell
+@'
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI(title="Travel Agent")
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+def plan_trip(message: str) -> str:
+    text = message.lower()
+    if "lisbon" in text:
+        return (
+            "Summary: Lisbon is a strong 3-day food and history trip. "
+            "Day 1: Baixa, Chiado, and a sunset viewpoint. "
+            "Day 2: Alfama, Sao Jorge Castle, and fado. "
+            "Day 3: Belem, pastries, and a riverside walk. "
+            "Notes: use transit, reserve popular restaurants early, and I cannot make live bookings."
+        )
+    if "seattle" in text:
+        return (
+            "Summary: Seattle can work well for a low-budget coffee and museum weekend. "
+            "Day 1: Pike Place, waterfront, and independent coffee shops. "
+            "Day 2: Museum of Pop Culture or Seattle Art Museum plus Capitol Hill. "
+            "Notes: use transit, plan for rain, choose free viewpoints, and I cannot make live bookings."
+        )
+    if "tokyo" in text:
+        return (
+            "Summary: Tokyo with kids works best with short travel hops and flexible pacing. "
+            "Plan: mix Ueno, Asakusa, Shibuya, teamLab or a science museum, parks, and one easy day trip. "
+            "Notes: use IC transit cards, avoid overpacking each day, and I cannot make live bookings."
+        )
+    return (
+        "Summary: I can help plan a short leisure trip. "
+        "Please share the destination, trip length, budget, and traveler preferences. "
+        "I cannot make live bookings."
+    )
+
+
+@app.post("/chat")
+def chat(request: ChatRequest) -> dict[str, str]:
+    return {"text": plan_trip(request.message)}
+'@ | Set-Content -Encoding utf8 app.py
+```
+
+Start it in a second terminal:
+
+```powershell
+cd agentops-workshop
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+Set the local target:
+
+```powershell
+$env:TRAVEL_AGENT_TARGET = "http://127.0.0.1:8000/chat"
+```
+
+To make this a real Foundry Hosted Agent for CI:
+
+1. Install the
+   [Foundry Toolkit for Visual Studio Code](https://marketplace.visualstudio.com/items?itemName=TeamsDevApp.vscode-ai-foundry).
+2. Confirm the Foundry project has a deployed model and the required Hosted
+   Agent permissions for your user or project identity.
+3. In VS Code, run `Microsoft Foundry: Create a New Hosted Agent`.
+4. Choose a single-agent template, Python or C#, and the model deployment.
+5. Replace the generated instructions or source logic with the Travel Agent
+   behavior from this workshop.
+6. Press F5 to debug locally with Agent Inspector.
+7. Run `Microsoft Foundry: Deploy Hosted Agent`.
+8. Copy the deployed endpoint URL and set:
+
+   ```powershell
+   $env:TRAVEL_AGENT_TARGET = "https://<your-foundry-hosted-travel-agent-endpoint>"
+   ```
+
+If the deployed Foundry Hosted Agent follows the Responses API shape, use
+`protocol: responses` in `agentops.yaml`.
 
 If you want the notebook-style Foundry build path, follow the Azure Samples
 workshop labs for creating agents, tools, tracing, evaluation, and red-team
@@ -77,44 +198,43 @@ scans:
 https://github.com/Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop/tree/2026-04-aie-europe
 ```
 
-Return here once you have an agent reference or endpoint.
+## 2. Create the travel eval dataset
 
-## 2. Initialize the repo-side release contract
+```powershell
+New-Item -ItemType Directory -Force .agentops\data | Out-Null
+@'
+{"input":"Plan a 3-day first-time trip to Lisbon for a couple who likes food and history.","expected":"A concise 3-day Lisbon itinerary with food, history, neighborhoods such as Baixa, Alfama, and Belem, practical notes, and no claim to make live bookings."}
+{"input":"Suggest a low-budget weekend in Seattle for a solo traveler who likes coffee and museums.","expected":"A practical weekend Seattle plan with low-budget choices, coffee and museum suggestions, transit or weather notes, and no claim to make live bookings."}
+{"input":"I want to visit Tokyo for 5 days with two kids. What should we do?","expected":"A family-friendly 5-day Tokyo itinerary with kid-appropriate activities, transit and pacing notes, and no claim to make live bookings."}
+'@ | Set-Content -Encoding utf8 .agentops\data\travel-smoke.jsonl
+```
 
-Prompt agent:
+## 3. Initialize the repo-side release contract
+
+Use the target you set in `TRAVEL_AGENT_TARGET`:
 
 ```powershell
 agentops init `
   --dir . `
   --azd-env dev `
   --project-endpoint "https://<resource>.services.ai.azure.com/api/projects/<project>" `
-  --agent "travel-agent:1" `
-  --dataset ".agentops/data/smoke.jsonl" `
+  --agent "$env:TRAVEL_AGENT_TARGET" `
+  --dataset ".agentops/data/travel-smoke.jsonl" `
   --no-prompt
 ```
 
-Hosted agent:
-
-```powershell
-agentops init `
-  --dir . `
-  --azd-env dev `
-  --project-endpoint "https://<resource>.services.ai.azure.com/api/projects/<project>" `
-  --agent "https://my-agent.example.com/chat" `
-  --dataset ".agentops/data/smoke.jsonl" `
-  --no-prompt
-```
-
-For hosted agents, add the endpoint protocol fields:
+For a hosted HTTP endpoint, add the endpoint protocol fields:
 
 ```yaml
 protocol: http-json
 request_field: message
 response_field: text
-auth_header_env: HOSTED_AGENT_TOKEN
 ```
 
-## 3. Decide the eval runner
+Add `auth_header_env: HOSTED_AGENT_TOKEN` only when the deployed endpoint needs
+a bearer token.
+
+## 4. Decide the eval runner
 
 ```powershell
 agentops workflow analyze --format text
@@ -132,7 +252,7 @@ This is the key alignment rule. Foundry-native prompt agents use the official
 runner where possible. AgentOps keeps the local path for hosted endpoints,
 models, unsupported evaluator mappings, and repo-specific threshold evidence.
 
-## 4. Run the first eval
+## 5. Run the first eval
 
 For hosted agents or local fallback:
 
@@ -156,7 +276,7 @@ The generated workflow prepares official eval input under:
 
 and records release evidence after the gate.
 
-## 5. Add CI/CD gates
+## 6. Add CI/CD gates
 
 Generate the common release path:
 
@@ -170,7 +290,7 @@ The generated workflows are intentionally boring:
 - Dev/QA/Prod: deploy with azd or placeholders, then run readiness checks.
 - Watchdog: run Doctor on a schedule and upload the report.
 
-## 6. Wire observability
+## 7. Wire observability
 
 Foundry and Azure Monitor own live observability. AgentOps only checks whether
 the repo and runtime are wired to those signals.
@@ -192,7 +312,7 @@ For custom hosted runtimes, install the `[agent]` extra and configure Azure
 Monitor OpenTelemetry in the app startup. In Foundry, use the Observability
 pages for trace drilldown, metrics, and Ask AI analysis.
 
-## 7. Run Doctor and create release evidence
+## 8. Run Doctor and create release evidence
 
 ```powershell
 agentops doctor --workspace . --evidence-pack
@@ -210,7 +330,7 @@ signals:
 - trace-regression status;
 - links back to Foundry and Azure Monitor.
 
-## 8. Run Foundry red-team scans
+## 9. Run Foundry red-team scans
 
 Red-team scans are a Foundry capability. Run them from Foundry Observability /
 Red Teaming or the official Foundry SDK path. AgentOps does not create or run
@@ -230,7 +350,7 @@ agentops doctor --workspace . --evidence-pack
 Cockpit links back to Foundry Red Teaming so reviewers can drill into the
 managed scan results.
 
-## 9. Promote production traces into regression candidates
+## 10. Promote production traces into regression candidates
 
 Export reviewed Foundry or Application Insights traces to JSON/JSONL. Preview
 the conversion first:
@@ -251,7 +371,7 @@ This writes reviewable regression candidates under `.agentops/data/`. AgentOps
 does not claim they are human-approved truth. They are candidates until the team
 reviews and accepts them.
 
-## 10. Open Cockpit
+## 11. Open Cockpit
 
 ```powershell
 agentops cockpit --workspace .
