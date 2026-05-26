@@ -23,6 +23,7 @@ and AgentOps workflow remain the actual runtime path.
 | `microsoft/ai-agent-evals` | `placerda/ai-agent-evals` | Provides the Foundry prompt-agent gate contract used as contrast for why hosted endpoints use AgentOps local eval. |
 | `microsoft/foundry-toolkit` | `placerda/foundry-toolkit` | Frames the Hosted Agent create/debug/deploy flow and the Operate handoff in VS Code. |
 | `microsoft/azure-skills` | `placerda/azure-skills` | Shows where the Microsoft Foundry skill can guide hosted-agent CI/CD, observe, and trace-regression follow-through. |
+| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | `2026-04-aie-europe` branch | Reference for the Foundry Observe/Optimize/Protect loop: OpenTelemetry traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
 
 Unlike the Prompt Agent quickstart, this endpoint tutorial does not point the
 generated PR workflow at `ai-agent-evals`. Hosted and HTTP agents are evaluated
@@ -37,6 +38,13 @@ the response, apply repo thresholds, and write the normalized `results.json`.
 | Observe runtime | Foundry Operate, Azure Monitor, Application Insights | Confirm traces, latency, errors, and metrics exist. | Checks whether telemetry is wired. |
 | Evaluate endpoint | AgentOps local runner | Invoke the URL and normalize results. | Primary eval path for hosted endpoints. |
 | Review readiness | AgentOps Doctor and Cockpit | Check CI, eval, telemetry, evidence, and links. | Primary owner of repo-side release proof. |
+
+Observability needs an App Insights resource connected to the Foundry project or
+agent runtime. If you ask Foundry to create or attach that resource from the
+Traces view, your identity must have the required Azure permissions. The local
+FastAPI sample below emits custom OpenTelemetry spans only after you enable the
+observability step; a real Foundry Hosted Agent emits richer Foundry runtime
+spans.
 
 ## 1. Create a clean workspace and install dependencies
 
@@ -197,7 +205,7 @@ You need:
 | Foundry project endpoint | optional, but recommended for links and evaluators |
 | Azure OpenAI endpoint | `https://<resource>.openai.azure.com`, used later by local AI-assisted evaluators |
 | Evaluator model deployment | `gpt-4o-mini`, used later by local AI-assisted evaluators |
-| Application Insights connection string | optional later, for observability |
+| Application Insights connection string | recommended for observability and Doctor links |
 
 If the deployed endpoint needs a bearer token:
 
@@ -265,7 +273,101 @@ For a raw Foundry invocations endpoint, use:
 protocol: invocations
 ```
 
-## 6. Check the selected eval runner
+## 6. Observe the endpoint in App Insights
+
+The local FastAPI endpoint is useful for the AgentOps eval loop, but it is not a
+Foundry-managed runtime. To make the observability story concrete, add
+OpenTelemetry spans that flow to the same App Insights backend Foundry uses for
+trace drilldown.
+
+Install the Azure Monitor OpenTelemetry distro when you reach this step:
+
+```powershell
+python -m pip install azure-monitor-opentelemetry
+```
+
+Make sure the active azd env has an App Insights connection string. If automatic
+discovery did not populate it, store the value once:
+
+```powershell
+agentops init --appinsights-connection-string "<connection-string>"
+```
+
+Load that value into the terminal that will run `uvicorn`:
+
+```powershell
+$env:APPLICATIONINSIGHTS_CONNECTION_STRING = (
+  Get-Content .azure\dev\.env |
+  Where-Object { $_ -like "APPLICATIONINSIGHTS_CONNECTION_STRING=*" } |
+  Select-Object -First 1
+) -replace "^APPLICATIONINSIGHTS_CONNECTION_STRING=", ""
+```
+
+Open `app.py` and add these imports after `import os`:
+
+```python
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry import trace
+```
+
+Add this after `app = FastAPI(title="Travel Agent")`:
+
+```python
+if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
+    configure_azure_monitor()
+
+tracer = trace.get_tracer("agentops.travel-agent")
+```
+
+Replace the `/chat` handler with:
+
+```python
+@app.post("/chat")
+def chat(request: ChatRequest) -> dict[str, str]:
+    with tracer.start_as_current_span("travel-agent.chat") as span:
+        mode = os.getenv("TRAVEL_AGENT_MODE", "normal")
+        span.set_attribute("travel.agent.mode", mode)
+        span.set_attribute("travel.query.length", len(request.message))
+        response_text = plan_trip(request.message)
+        span.set_attribute("travel.response.length", len(response_text))
+        return {"text": response_text}
+```
+
+Restart the server and replay the dataset prompts:
+
+```powershell
+@(
+  "Plan a 3-day first-time trip to Lisbon for a couple who likes food and history.",
+  "Suggest a low-budget weekend in Seattle for a solo traveler who likes coffee and museums.",
+  "I want to visit Tokyo for 5 days with two kids. What should we do?"
+) | ForEach-Object {
+  Invoke-RestMethod `
+    -Method Post `
+    -Uri $env:TRAVEL_AGENT_ENDPOINT `
+    -ContentType "application/json" `
+    -Body (@{ message = $_ } | ConvertTo-Json)
+}
+```
+
+Then open Application Insights **Logs** or the Foundry **Traces** view and wait
+2-5 minutes if the trace is not visible immediately. For the local FastAPI
+sample, look for the `travel-agent.chat` operation and the custom attributes in
+`customDimensions`:
+
+```kusto
+union traces, requests, dependencies
+| where timestamp > ago(1h)
+| where operation_Name has "travel-agent" or tostring(customDimensions["travel.agent.mode"]) != ""
+| project timestamp, itemType, operation_Id, operation_Name, message, customDimensions
+| order by timestamp desc
+```
+
+Those attributes are tutorial conventions, not special Foundry fields. A
+deployed Foundry Hosted Agent uses the same App Insights backend and Foundry
+trace surface, but its runtime spans include richer agent, tool, model, and
+conversation semantics that the local FastAPI sample does not produce.
+
+## 7. Check the selected eval runner
 
 ```powershell
 agentops workflow analyze --format text
@@ -282,7 +384,7 @@ Foundry prompt agents. Hosted agents use AgentOps local eval so the repo can
 invoke the endpoint, normalize results, apply thresholds, and keep a stable
 `results.json` contract.
 
-## 7. Run a local eval
+## 8. Run a local eval
 
 Local AI-assisted evaluators need a judge model deployment. This is separate
 from `agentops init`: initialization captures the workspace target, while this
@@ -307,7 +409,7 @@ The run writes:
 .agentops/results/latest/
 ```
 
-## 8. Force an endpoint regression, compare, then fix it
+## 9. Force an endpoint regression, compare, then fix it
 
 The sample endpoint includes a deliberate regression switch. Stop the server in
 the second terminal, restart it in regressed mode, and run a comparison against
@@ -347,7 +449,7 @@ This is the core AgentOps loop for hosted endpoints: keep a stable dataset,
 compare a changed runtime against the last known result, fix the agent, and
 rerun the same gate before a PR or release.
 
-## 9. Generate CI and Doctor evidence
+## 10. Generate CI and Doctor evidence
 
 ```powershell
 agentops workflow generate --kinds pr,watchdog --force
@@ -375,7 +477,7 @@ natural guidance layer to teach Copilot/agents how to connect Foundry Toolkit,
 Azure Monitor, trace regression, and CI/CD readiness without making the tutorial
 look self-contained inside AgentOps.
 
-## 10. Open Cockpit
+## 11. Open Cockpit
 
 ```powershell
 agentops cockpit --workspace .
@@ -389,6 +491,8 @@ status, release evidence, CI/CD, and next actions.
 You are done when:
 
 - The Travel Agent endpoint responds to `POST /chat`.
+- At least one endpoint request appears in App Insights or Foundry Traces with
+  the `travel-agent.chat` operation.
 - `agentops workflow analyze` selects `agentops-local`.
 - `agentops eval run` writes `results.json` and `report.md`.
 - You forced the endpoint into regressed mode, compared it with the baseline,

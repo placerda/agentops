@@ -24,6 +24,7 @@ cohesive demo environment.
 | `microsoft/ai-agent-evals` | `placerda/ai-agent-evals` | Provides the Foundry-native PR evaluation gate used by the generated workflow. |
 | `microsoft/foundry-toolkit` | `placerda/foundry-toolkit` | Frames the VS Code create/debug experience and the Operate handoff after a prompt version is ready. |
 | `microsoft/azure-skills` | `placerda/azure-skills` | Connects Copilot guidance to Foundry observe, CI/CD, regression, and trace follow-through. |
+| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | `2026-04-aie-europe` branch | Reference for the Foundry Observe/Optimize/Protect loop: traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
 
 ## Journey you will exercise
 
@@ -31,6 +32,7 @@ cohesive demo environment.
 |---|---|---|---|
 | Create the agent | Foundry portal, Foundry SDK, Foundry Toolkit, or `microsoft-foundry` skill | Create and publish `travel-agent`. | No ownership; AgentOps consumes the published target. |
 | Try and debug | Foundry playground, VS Code, Copilot Chat | Validate behavior before adding release gates. | Optional quick eval later. |
+| Observe the run | Foundry Traces, Application Insights, Ask AI | Inspect the first trace, quality signals, and conversation context. | Later checks telemetry wiring and links evidence back to Foundry. |
 | Evaluate in CI | Official Microsoft AI Agent Evaluation | Run Foundry-native evaluation for `travel-agent:<version>`. | Generates routing and records evidence. |
 | Review readiness | AgentOps Doctor and Cockpit | Check CI, eval, telemetry, evidence, and links. | Primary owner of repo-side release proof. |
 
@@ -75,6 +77,29 @@ Test it in the Foundry playground with:
 ```text
 Plan a 3-day first-time trip to Lisbon for a couple who likes food and history.
 ```
+
+Before leaving Foundry, turn that playground call into an observability check:
+
+1. Open the agent or project **Traces** view. If Foundry asks you to connect
+   Application Insights, connect an existing resource or create one from the
+   portal flow. You need permission to create or attach that resource.
+2. Confirm the App Insights resource appears under the Foundry project connected
+   resources.
+3. Run the Lisbon prompt again in the playground.
+4. Open **Traces**, wait 2-5 minutes if needed, and click the new **Trace ID**.
+   Inspect the span tree, latency, model call, and prompt/response details.
+5. Use **Ask AI** on the trace with a question such as:
+
+   ```text
+   Explain what happened in this trace and call out any latency or quality risks.
+   ```
+
+6. Open the **Conversation ID** for the same interaction. Use the Trace ID for one
+   request and the Conversation ID for the broader multi-turn context.
+
+This is the Foundry side of Operate. AgentOps does not replace it; later Doctor,
+Cockpit, and release evidence check whether the repo can point reviewers back to
+these official runtime signals.
 
 ## 2. Create a clean workspace and install AgentOps
 
@@ -121,7 +146,7 @@ You need:
 |---|---|
 | Foundry project endpoint | `https://<resource>.services.ai.azure.com/api/projects/<project>` |
 | Prompt agent reference | `travel-agent:1` or the version Foundry published |
-| Application Insights connection string | optional later, for observability |
+| Application Insights connection string | recommended for observability and Doctor links |
 
 You do not need to set an evaluator deployment before initialization.
 `agentops init` collects the workspace values. The evaluator deployment is a
@@ -390,10 +415,12 @@ code .agentops\release\latest\evidence.md
 ```
 
 Open both files. The Doctor report explains what is ready and what is missing;
-the evidence pack is the reviewer-friendly summary. In a fresh quickstart it is
-normal to see warnings for production telemetry, scheduled CI, or trace
-regression history. Those warnings are useful because they show the difference
-between "the eval ran once" and "this agent has enough release evidence."
+the evidence pack is the reviewer-friendly summary. If the Foundry trace from
+step 1 appeared, telemetry readiness should have a concrete resource to link to.
+In a fresh quickstart it is normal to see warnings for production telemetry,
+scheduled CI, or trace regression history. Those warnings are useful because
+they show the difference between "the eval ran once" and "this agent has enough
+release evidence."
 
 Doctor is read-only. It does not create Foundry resources or run red-team scans.
 It checks whether the repo has the signals a release reviewer needs: eval gates,
@@ -415,6 +442,8 @@ evidence, CI/CD, and next actions.
 You are done when:
 
 - The Travel Agent exists in Foundry and has a published `travel-agent:<version>` reference.
+- At least one playground interaction appears in Foundry Traces, and Ask AI can
+  explain the Trace ID.
 - `agentops workflow analyze` selects Microsoft Foundry AI Agent Evaluation.
 - `agentops workflow generate` creates a PR workflow with the Microsoft Action
   reference for product/release branches, and the tutorial reference action only

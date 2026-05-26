@@ -42,6 +42,8 @@ review.
     HTTPS endpoint for CI.
 - One Azure OpenAI deployment for evaluator calls, for example `gpt-4o-mini`.
 - Application Insights connected to the Foundry project or agent runtime.
+  If Foundry needs to create or attach it from the Traces view, your identity
+  needs the required Azure permissions.
 
 Install AgentOps in a clean tutorial workspace:
 
@@ -80,6 +82,7 @@ evaluation runner, skill guidance, and AgentOps readiness evidence.
 | `microsoft/ai-agent-evals` | `placerda/ai-agent-evals` | Foundry-native CI/CD evaluation runner for prompt-agent gates and compare links. |
 | `microsoft/foundry-toolkit` | `placerda/foundry-toolkit` | VS Code create/debug/deploy surface for the Operate/readiness handoff. |
 | `microsoft/azure-skills` | `placerda/azure-skills` | Microsoft Foundry skill guidance for observe, CI/CD monitoring, regression, and trace follow-through. |
+| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | `2026-04-aie-europe` branch | Reference path for Foundry Observe/Optimize/Protect: traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
 
 ## 1. Create the Travel Agent target
 
@@ -441,12 +444,25 @@ coding agents.
 ## 8. Wire observability
 
 Foundry and Azure Monitor own live observability. AgentOps only checks whether
-the repo and runtime are wired to those signals.
+the repo and runtime are wired to those signals, whether release evidence can
+point back to them, and whether reviewed traces can become future regression
+rows.
+
+Use this loop in the video:
+
+| Signal | Foundry or Azure Monitor action | AgentOps handoff |
+|---|---|---|
+| App Insights connection | In Foundry, open the project or agent **Traces** view and connect an App Insights resource. Verify it under project connected resources. | Doctor checks whether telemetry wiring is discoverable. |
+| Live trace | Run one playground prompt for a Prompt Agent, or call the hosted endpoint a few times. Open **Traces**, wait 2-5 minutes if needed, and click the Trace ID. | Evidence and Cockpit link reviewers back to the runtime view. |
+| Trace explanation | Use **Ask AI** on the trace, for example: `Explain the slowest span and any quality risk in this trace.` | The explanation informs the release discussion; AgentOps does not rewrite it. |
+| Eval context | From a Foundry eval run, inspect row-level explanations and, when available, the trace attached to the interaction. | The repo keeps the exact target, dataset, gate, and evidence together. |
+| Trace learning | Export or curate traces that represent real issues. | `agentops eval promote-traces` turns reviewed traces into regression candidates. |
 
 If runtime discovery does not find the connected App Insights resource, set the
 connection string in the active azd env:
 
 ```powershell
+agentops init --appinsights-connection-string "<connection-string>"
 agentops init show --reveal-secrets
 notepad .azure\dev\.env
 ```
@@ -457,9 +473,70 @@ The env file should include:
 APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=...
 ```
 
-For custom hosted runtimes, install the `[agent]` extra and configure Azure
-Monitor OpenTelemetry in the app startup. In Foundry, use the Observability
-pages for trace drilldown, metrics, and Ask AI analysis.
+For the local Hosted/HTTP sample, add OpenTelemetry before you restart the
+endpoint:
+
+```powershell
+python -m pip install azure-monitor-opentelemetry
+```
+
+Add these imports to `app.py`:
+
+```python
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry import trace
+```
+
+Configure the tracer after `app = FastAPI(title="Travel Agent")`:
+
+```python
+if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
+    configure_azure_monitor()
+
+tracer = trace.get_tracer("agentops.travel-agent")
+```
+
+Wrap the `/chat` response in a span:
+
+```python
+@app.post("/chat")
+def chat(request: ChatRequest) -> dict[str, str]:
+    with tracer.start_as_current_span("travel-agent.chat") as span:
+        mode = os.getenv("TRAVEL_AGENT_MODE", "normal")
+        span.set_attribute("travel.agent.mode", mode)
+        span.set_attribute("travel.query.length", len(request.message))
+        response_text = plan_trip(request.message)
+        span.set_attribute("travel.response.length", len(response_text))
+        return {"text": response_text}
+```
+
+Then load the connection string into the server terminal:
+
+```powershell
+$env:APPLICATIONINSIGHTS_CONNECTION_STRING = (
+  Get-Content .azure\dev\.env |
+  Where-Object { $_ -like "APPLICATIONINSIGHTS_CONNECTION_STRING=*" } |
+  Select-Object -First 1
+) -replace "^APPLICATIONINSIGHTS_CONNECTION_STRING=", ""
+```
+
+Restart `uvicorn` after setting that variable, then call the endpoint again so
+the new requests produce spans.
+
+For a real Foundry Hosted Agent, the runtime emits richer Foundry spans for
+agent runs, tool calls, model calls, and conversation context. For the local
+FastAPI sample, you will see the custom `travel-agent.chat` operation and
+attributes in App Insights, but not Foundry-managed Conversation IDs.
+
+Use this KQL in the App Insights **Logs** view when you have a Trace ID or
+operation ID from the portal:
+
+```kusto
+union traces, requests, dependencies
+| where timestamp > ago(1h)
+| where operation_Id == "<trace-or-operation-id>"
+| order by timestamp asc
+```
 
 ## 9. Run Doctor and create release evidence
 
@@ -558,5 +635,7 @@ You are ready for a release review when:
   through Foundry prompt versions or AgentOps local baseline comparison.
 - `agentops doctor --evidence-pack` writes `evidence.md`.
 - Application Insights is connected or the evidence clearly says it is missing.
+- At least one trace or operation was inspected in Foundry Traces or App
+  Insights, including an Ask AI explanation when available.
 - Foundry red-team scans are linked or tracked as a release action.
 - Trace learnings have a path back into regression candidates.
