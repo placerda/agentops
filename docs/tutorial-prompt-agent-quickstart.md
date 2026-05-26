@@ -84,9 +84,10 @@ Create a prompt agent first. AgentOps starts after the agent exists.
    ```
 
 5. Save and publish the agent.
-6. Copy the published reference. The rest of this tutorial assumes
-   `travel-agent:1`; if Foundry shows a different version, use that exact
-   `name:version` value instead.
+6. Copy the published reference. Foundry commonly shows `travel-agent:2` after
+   this first publish, so the rest of this tutorial uses that as the baseline.
+   If Foundry shows a different version, use that exact `name:version` value
+   instead and shift the later regression/fix numbers accordingly.
 
 Test it in the Foundry playground with:
 
@@ -162,7 +163,7 @@ You need:
 | Value | Example |
 |---|---|
 | Foundry project endpoint | `https://<resource>.services.ai.azure.com/api/projects/<project>` |
-| Prompt agent reference | `travel-agent:1` or the version Foundry published |
+| Prompt agent reference | `travel-agent:2` or the version Foundry published |
 | Application Insights connection string | recommended for observability and Doctor links |
 
 You do not need to set an evaluator deployment before initialization.
@@ -180,7 +181,7 @@ Answer the prompts as the wizard asks them:
 | Prompt | Answer |
 |---|---|
 | Foundry project endpoint | `https://<resource>.services.ai.azure.com/api/projects/<project>` |
-| Agent | `travel-agent:1`, or the exact published version from Foundry |
+| Agent | `travel-agent:2`, or the exact published version from Foundry |
 | Dataset path | `.agentops/data/travel-smoke.jsonl` |
 
 The wizard does not ask for App Insights. Later runtime commands try to discover
@@ -210,7 +211,7 @@ agentops.yaml
 
 ```yaml
 version: 1
-agent: travel-agent:1
+agent: travel-agent:2
 dataset: .agentops/data/travel-smoke.jsonl
 ```
 
@@ -331,9 +332,9 @@ ship a worse prompt, watch the eval gate or metrics move, then recover.
 
 This walkthrough assumes this concrete sequence:
 
-- `travel-agent:1` is the last good version that already has a green run.
-- `travel-agent:2` is the intentionally regressed version you are about to test.
-- `travel-agent:3` is the restored version you publish after the regression
+- `travel-agent:2` is the last good version that already has a green run.
+- `travel-agent:3` is the intentionally regressed version you are about to test.
+- `travel-agent:4` is the restored version you publish after the regression
   test.
 
 If your Foundry project publishes different numbers because you saved or
@@ -366,7 +367,7 @@ for comparison.
    plans, practical notes, constraints, or booking caveats.
    ```
 
-2. Publish it as the next version, for example `travel-agent:2`.
+2. Publish it as the next version, for example `travel-agent:3`.
 3. Re-run the wizard and update only the agent value:
 
    ```powershell
@@ -374,7 +375,7 @@ for comparison.
    ```
 
    Keep the same endpoint and dataset, but answer `Agent` with
-   `travel-agent:2`.
+   `travel-agent:3`.
 4. Create a regression branch, push it, and open a PR to `main`:
 
    ```powershell
@@ -385,7 +386,7 @@ for comparison.
    gh pr create --base main --head feature/regress-travel-agent --title "Test AgentOps regression gate" --body "Evaluates the intentionally regressed travel-agent prompt."
    ```
 
-   The PR gate reads `agent: travel-agent:2` from `agentops.yaml` in that
+   The PR gate reads `agent: travel-agent:3` from `agentops.yaml` in that
    branch and evaluates the regressed version. Open the PR in GitHub and watch
    **Checks** -> **AgentOps PR / Eval (PR gate)**:
 
@@ -399,13 +400,13 @@ for comparison.
      finish, then click **Details**.
    - Still in GitHub, on the workflow run **Summary**, find **Azure AI
      Evaluation**. The table shows the exact regressed Agent ID and its pass
-     rates. Confirm it says `travel-agent:2`.
+     rates. Confirm it says `travel-agent:3`.
    - Still in GitHub, click **View run results** in that table. This opens
      Foundry in a new page for the regressed agent run. Keep this Foundry page
      open and use **Overall metric results** as the quality source of truth; the
      GitHub artifact is only provenance.
    - Now in Foundry, click the back arrow to return to **Evaluations**. Open the
-     earlier green run for `travel-agent:1` in another browser tab.
+     earlier green run for `travel-agent:2` in another browser tab.
    - Compare the two Foundry pages side by side: pass rate and average score in
      **Overall metric results**, then the same three rows in **Detailed metrics
      result**. If you need row-level explanations, click **Analyze Results** on
@@ -414,7 +415,7 @@ for comparison.
      day-by-day plans, practical notes, constraints, or booking caveats.
 
 5. Restore the original Travel Agent instructions from step 1, publish again
-   as the next version, for example `travel-agent:3`.
+   as the next version, for example `travel-agent:4`.
 6. Point the repo at the fixed version:
 
    ```powershell
@@ -422,7 +423,7 @@ for comparison.
    ```
 
    Keep the same endpoint and dataset, but answer `Agent` with
-   `travel-agent:3`.
+   `travel-agent:4`.
 7. Create a fix branch, push it, and open a PR to `main`:
 
    ```powershell
@@ -435,9 +436,9 @@ for comparison.
    gh pr create --base main --head fix/restore-travel-agent --title "Restore Travel Agent eval target" --body "Points AgentOps at the restored travel-agent prompt version."
    ```
 
-   The new PR gate should evaluate `travel-agent:3`. In the GitHub Actions
+   The new PR gate should evaluate `travel-agent:4`. In the GitHub Actions
    summary, click **View run results** and confirm the Foundry metrics recover
-   relative to the regressed `travel-agent:2` run.
+   relative to the regressed `travel-agent:3` run.
 
 The learning loop is the point: Foundry owns prompt versioning and the managed
 evaluation run; AgentOps keeps the repo pointed at the exact version under

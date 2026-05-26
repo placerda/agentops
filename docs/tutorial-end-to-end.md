@@ -117,11 +117,12 @@ Choose one path. The rest of the tutorial works with either target.
    ```
 
 5. Save and publish the agent.
-6. Set the target reference. Replace `1` if Foundry published a different
-   version:
+6. Set the target reference. Foundry commonly shows `travel-agent:2` after this
+   first publish. If Foundry shows a different version, use that exact value and
+   shift the later prompt-regression numbers accordingly:
 
    ```powershell
-   $env:TRAVEL_AGENT_TARGET = "travel-agent:1"
+   $env:TRAVEL_AGENT_TARGET = "travel-agent:2"
    ```
 
 ### Option B: create a Hosted/HTTP Travel Agent endpoint
@@ -246,7 +247,7 @@ Answer the prompts as the wizard asks them:
 | Prompt | Answer |
 |---|---|
 | Foundry project endpoint | `https://<resource>.services.ai.azure.com/api/projects/<project>` |
-| Agent | The value in `$env:TRAVEL_AGENT_TARGET`, such as `travel-agent:1` or `http://127.0.0.1:8000/chat` |
+| Agent | The value in `$env:TRAVEL_AGENT_TARGET`, such as `travel-agent:2` or `http://127.0.0.1:8000/chat` |
 | Dataset path | `.agentops/data/travel-smoke.jsonl` |
 
 The wizard does not ask for App Insights. Later runtime commands try to discover
@@ -393,7 +394,7 @@ page open as the baseline.
    plans, practical notes, constraints, or booking caveats.
    ```
 
-2. Publish it as the next version, for example `travel-agent:2`.
+2. Publish it as the next version, for example `travel-agent:3`.
 3. Re-run the wizard and update only the agent value:
 
    ```powershell
@@ -407,7 +408,7 @@ page open as the baseline.
    vague prompt should lose quality because it no longer satisfies the travel
    dataset.
 5. Restore the original Travel Agent instructions, publish again as a fixed
-   version such as `travel-agent:3`, re-run `agentops init --reconfigure`, and
+   version such as `travel-agent:4`, re-run `agentops init --reconfigure`, and
    run the pipeline again.
 
 This exercises Foundry prompt versioning, Microsoft Foundry AI Agent Evaluation,
