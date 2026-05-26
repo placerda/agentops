@@ -23,7 +23,7 @@ reference, and skill guidance aligned in one cohesive demo environment.
 | `microsoft/ai-agent-evals` | Provides the Foundry-native PR evaluation gate used by the generated workflow. |
 | `microsoft/foundry-toolkit` | Frames the VS Code create/debug experience and the Operate handoff after a prompt version is ready. |
 | `microsoft/azure-skills` | Connects Copilot guidance to Foundry observe, CI/CD, regression, and trace follow-through. |
-| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | Reference for the Foundry Observe/Optimize/Protect loop: traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
+| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | Reference for the Foundry Observe/Optimize/Protect loop: traces, App Insights, Operate Ask AI, evaluations, and red-team follow-through. |
 
 ## Before you run the tutorial
 
@@ -35,7 +35,7 @@ prompts.
 |---|---|
 | Azure CLI is installed and `az login` succeeds with the tenant that owns the Foundry project. | AgentOps, Foundry SDK calls, and CI setup all need the same Azure identity context. |
 | You can create or publish a prompt agent in the Foundry project. | The tutorial starts from a real `travel-agent:<version>` target. |
-| You can create or attach Application Insights for the Foundry project, or you already have one connected. | Foundry Traces, Ask AI, Doctor, and Cockpit need telemetry to tell the observability story. |
+| You can create or attach Application Insights for the Foundry project, or you already have one connected. | Foundry Traces, the Operate dashboard, Doctor, and Cockpit need telemetry to tell the observability story. |
 | You can push to the tutorial GitHub repository and run GitHub Actions. | The PR gate and scheduled Doctor workflow only run after the repo is pushed. |
 | GitHub CLI is authenticated with `gh auth login` if you use the PR commands in this tutorial. | The regression step opens a PR and sends the reader directly to the workflow run. |
 | You can create a GitHub environment named `dev` and add Actions variables/secrets. | The generated workflow uses that environment for Azure auth and evaluator settings. |
@@ -48,7 +48,7 @@ prompts.
 |---|---|---|---|
 | Create the agent | Foundry portal, Foundry SDK, Foundry Toolkit, or `microsoft-foundry` skill | Create and publish `travel-agent`. | No ownership; AgentOps consumes the published target. |
 | Try and debug | Foundry playground, VS Code, Copilot Chat | Validate behavior before adding release gates. | Optional quick eval later. |
-| Observe the run | Foundry Traces, Application Insights, Ask AI | Inspect the first trace, quality signals, and conversation context. | Later checks telemetry wiring and links evidence back to Foundry. |
+| Observe the run | Foundry Traces, Application Insights, Foundry Operate | Inspect the first trace, quality signals, and conversation context. | Later checks telemetry wiring and links evidence back to Foundry. |
 | Evaluate in CI | Official Microsoft AI Agent Evaluation | Run Foundry-native evaluation for `travel-agent:<version>`. | Generates routing and records evidence. |
 | Review readiness | AgentOps Doctor and Cockpit | Check CI, eval, telemetry, evidence, and links. | Primary owner of repo-side release proof. |
 
@@ -95,25 +95,34 @@ Test it in the Foundry playground with:
 Plan a 3-day first-time trip to Lisbon for a couple who likes food and history.
 ```
 
-Before leaving Foundry, turn that playground call into an observability check:
+Before leaving Foundry, turn that playground call into an observability check.
+There are two separate Foundry surfaces here: the agent **Traces** tab for the
+single run, and **Operate** for aggregate metrics and Ask AI.
 
-1. Open the agent or project **Traces** view. If Foundry asks you to connect
+1. In **Build** -> **Agents**, open `travel-agent`, then open the **Traces**
+   tab. If Foundry asks you to connect
    Application Insights, connect an existing resource or create one from the
    portal flow. You need permission to create or attach that resource.
 2. Confirm the App Insights resource appears under the Foundry project connected
    resources.
 3. Run the Lisbon prompt again in the playground.
-4. Open **Traces**, wait 2-5 minutes if needed, and click the new **Trace ID**.
-   Inspect the span tree, latency, model call, and prompt/response details.
-5. Use **Ask AI** on the trace with a question such as:
-
-   ```text
-   Explain what happened in this trace and call out any latency or quality risks.
-   ```
-
+4. Open **Traces**, wait 2-5 minutes if needed, and find the newest row in
+   **Conversations** or **Responses**. Click the **Trace ID** link.
+5. In the trace details modal, inspect the left-side span list, such as
+   `invoke_agent` and the chat/model span, then use the right-side
+   **Input + Output** and **Metadata** tabs to review latency, model call,
+   prompt, response, tokens, and IDs.
 6. If Foundry shows a **Conversation ID** for the same interaction, open it to
    see the broader multi-turn context. If it is not shown, keep the Trace ID;
    that is enough for the rest of this tutorial.
+7. If you want an AI-assisted operations summary, switch to **Operate** ->
+   **Overview**, select the same subscription/project, wait for metrics to sync,
+   and use **Ask AI** there. Treat it as a dashboard-level helper, not a
+   trace-modal button. Example:
+
+   ```text
+   Help me identify any issues or anomalies in my agent metrics.
+   ```
 
 This is the Foundry side of Operate. AgentOps does not replace it; later Doctor,
 Cockpit, and release evidence check whether the repo can point reviewers back to
@@ -480,8 +489,8 @@ evidence, CI/CD, and next actions.
 You are done when:
 
 - The Travel Agent exists in Foundry and has a published `travel-agent:<version>` reference.
-- At least one playground interaction appears in Foundry Traces, and Ask AI can
-  explain the Trace ID.
+- At least one playground interaction appears in Foundry Traces, and you can
+  open the Trace ID to inspect the spans and input/output details.
 - `agentops workflow analyze` selects Microsoft Foundry AI Agent Evaluation.
 - `agentops workflow generate` creates a PR workflow with the Microsoft Action
   reference for product/release branches, and the tutorial reference action only

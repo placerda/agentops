@@ -22,7 +22,7 @@ Azure services, and AgentOps workflow remain the actual runtime path.
 | `microsoft/ai-agent-evals` | Provides the Foundry prompt-agent gate contract used as contrast for why hosted endpoints use AgentOps local eval. |
 | `microsoft/foundry-toolkit` | Frames the Hosted Agent create/debug/deploy flow and the Operate handoff in VS Code. |
 | `microsoft/azure-skills` | Shows where the Microsoft Foundry skill can guide hosted-agent CI/CD, observe, and trace-regression follow-through. |
-| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | Reference for the Foundry Observe/Optimize/Protect loop: OpenTelemetry traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
+| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | Reference for the Foundry Observe/Optimize/Protect loop: OpenTelemetry traces, App Insights, Operate Ask AI, evaluations, and red-team follow-through. |
 
 ## Before you run the tutorial
 
@@ -365,10 +365,9 @@ Restart the server and replay the dataset prompts:
 }
 ```
 
-Then open Application Insights **Logs** or the Foundry **Traces** view and wait
-2-5 minutes if the trace is not visible immediately. For the local FastAPI
-sample, look for the `travel-agent.chat` operation and the custom attributes in
-`customDimensions`:
+Then open Application Insights **Logs** and wait 2-5 minutes if the telemetry is
+not visible immediately. For the local FastAPI sample, look for the
+`travel-agent.chat` operation and the custom attributes in `customDimensions`:
 
 ```kusto
 union traces, requests, dependencies
@@ -533,8 +532,9 @@ status, release evidence, CI/CD, and next actions.
 You are done when:
 
 - The Travel Agent endpoint responds to `POST /chat`.
-- At least one endpoint request appears in App Insights or Foundry Traces with
-  the `travel-agent.chat` operation.
+- At least one local endpoint request appears in App Insights Logs with the
+  `travel-agent.chat` operation. If you deploy as a real Foundry Hosted Agent,
+  its richer runtime spans can also appear in Foundry Traces.
 - `agentops workflow analyze` selects `agentops-local`.
 - `agentops eval run` writes `results.json` and `report.md`.
 - You forced the endpoint into regressed mode, compared it with the baseline,

@@ -43,7 +43,7 @@ prompts.
 | Azure CLI is installed and `az login` succeeds with the tenant that owns the Foundry project. | AgentOps, Foundry SDK calls, Doctor, Cockpit, and CI setup all need the same Azure identity context. |
 | You have the Foundry project endpoint and can create or publish one Travel Agent target. | The target is either `travel-agent:<version>` for prompt agents or an HTTP endpoint for hosted agents. |
 | You have a chat-capable Azure OpenAI deployment, for example `gpt-4o-mini`. | Local evals and CI variables need a judge model for evaluator calls. |
-| Application Insights is connected to the Foundry project or agent runtime, or you can create/attach it. | Foundry Traces, Ask AI, Azure Monitor, Doctor, Cockpit, and evidence links need telemetry. |
+| Application Insights is connected to the Foundry project or agent runtime, or you can create/attach it. | Foundry Traces, Operate metrics/Ask AI when available, Azure Monitor, Doctor, Cockpit, and evidence links need telemetry. |
 | You can deploy or expose any hosted endpoint that CI will call. | `localhost` works for local eval; remote CI needs a reachable HTTPS URL. |
 | You can push to the tutorial GitHub repository and run GitHub Actions or Azure Pipelines. | PR, environment, and scheduled Doctor workflows only run after the repo is published. |
 | GitHub CLI is authenticated with `gh auth login` if you use GitHub PR commands while testing CI. | The regression and release-gate steps are smoother when repo, PR, and Actions access are already confirmed. |
@@ -88,7 +88,7 @@ evaluation runner, skill guidance, and AgentOps readiness evidence.
 | `microsoft/ai-agent-evals` | Foundry-native CI/CD evaluation runner for prompt-agent gates and compare links. |
 | `microsoft/foundry-toolkit` | VS Code create/debug/deploy surface for the Operate/readiness handoff. |
 | `microsoft/azure-skills` | Microsoft Foundry skill guidance for observe, CI/CD monitoring, regression, and trace follow-through. |
-| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | Reference path for Foundry Observe/Optimize/Protect: traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
+| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | Reference path for Foundry Observe/Optimize/Protect: traces, App Insights, Operate Ask AI, evaluations, and red-team follow-through. |
 
 ## 1. Create the Travel Agent target
 
@@ -510,8 +510,8 @@ Use this loop in the video:
 | Signal | Foundry or Azure Monitor action | AgentOps handoff |
 |---|---|---|
 | App Insights connection | In Foundry, open the project or agent **Traces** view and connect an App Insights resource. Verify it under project connected resources. | Doctor checks whether telemetry wiring is discoverable. |
-| Live trace | Run one playground prompt for a Prompt Agent, or call the hosted endpoint a few times. Open **Traces**, wait 2-5 minutes if needed, and click the Trace ID. | Evidence and Cockpit link reviewers back to the runtime view. |
-| Trace explanation | Use **Ask AI** on the trace, for example: `Explain the slowest span and any quality risk in this trace.` | The explanation informs the release discussion; AgentOps does not rewrite it. |
+| Live trace | Run one playground prompt for a Prompt Agent, or call the hosted endpoint a few times. Open the agent **Traces** tab, wait 2-5 minutes if needed, and click the Trace ID. In the modal, inspect spans plus the **Input + Output** and **Metadata** tabs. | Evidence and Cockpit link reviewers back to the runtime view. |
+| Operate summary | Switch to **Operate** -> **Overview**, select the same subscription/project, wait for metrics to sync, and use **Ask AI** for dashboard-level questions such as `Help me identify any issues or anomalies in my agent metrics.` | The summary informs the release discussion; AgentOps does not rewrite it. |
 | Eval context | From a Foundry eval run, inspect row-level explanations and, when available, the trace attached to the interaction. | The repo keeps the exact target, dataset, gate, and evidence together. |
 | Trace learning | Export or curate traces that represent real issues. | `agentops eval promote-traces` turns reviewed traces into regression candidates. |
 
@@ -582,8 +582,9 @@ the new requests produce spans.
 
 For a real Foundry Hosted Agent, the runtime emits richer Foundry spans for
 agent runs, tool calls, model calls, and conversation context. For the local
-FastAPI sample, you will see the custom `travel-agent.chat` operation and
-attributes in App Insights, but not Foundry-managed Conversation IDs.
+FastAPI sample, use App Insights **Logs** to see the custom `travel-agent.chat`
+operation and attributes; it does not produce Foundry-managed Conversation IDs
+or the same agent trace modal as a Foundry-managed runtime.
 
 Use this KQL in the App Insights **Logs** view when you have a Trace ID or
 operation ID from the portal:
@@ -700,6 +701,6 @@ You are ready for a release review when:
 - `agentops doctor --evidence-pack` writes `evidence.md`.
 - Application Insights is connected or the evidence clearly says it is missing.
 - At least one trace or operation was inspected in Foundry Traces or App
-  Insights, including an Ask AI explanation when available.
+  Insights, and Operate Ask AI was used for an aggregate summary when available.
 - Foundry red-team scans are linked or tracked as a release action.
 - Trace learnings have a path back into regression candidates.
