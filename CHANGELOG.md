@@ -5,6 +5,8 @@ This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres 
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-26
+
 ### Fixed
 - **Release workflow verification.** Release builds now pin package versions from
   the release tag, assert the generated distribution matches that version, and
