@@ -14,17 +14,16 @@ This path validates the Foundry-native route:
 ## Repository set used in this tutorial
 
 This tutorial intentionally shows the broader Foundry ecosystem, not only
-AgentOps. For this tutorial path, use the repository references below so the
-CLI, workflow runner, Toolkit reference, and skill guidance stay aligned in one
-cohesive demo environment.
+AgentOps. The repository set below keeps the CLI, workflow runner, Toolkit
+reference, and skill guidance aligned in one cohesive demo environment.
 
-| Repository | Tutorial reference | Role in the journey |
-|---|---|---|
-| `Azure/agentops` | `placerda/agentops` | Provides the AgentOps CLI, workflow generation, Doctor, Cockpit, and release evidence flow. |
-| `microsoft/ai-agent-evals` | `placerda/ai-agent-evals` | Provides the Foundry-native PR evaluation gate used by the generated workflow. |
-| `microsoft/foundry-toolkit` | `placerda/foundry-toolkit` | Frames the VS Code create/debug experience and the Operate handoff after a prompt version is ready. |
-| `microsoft/azure-skills` | `placerda/azure-skills` | Connects Copilot guidance to Foundry observe, CI/CD, regression, and trace follow-through. |
-| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | `2026-04-aie-europe` branch | Reference for the Foundry Observe/Optimize/Protect loop: traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
+| Repository | Role in the journey |
+|---|---|
+| `Azure/agentops` | Provides the AgentOps CLI, workflow generation, Doctor, Cockpit, and release evidence flow. |
+| `microsoft/ai-agent-evals` | Provides the Foundry-native PR evaluation gate used by the generated workflow. |
+| `microsoft/foundry-toolkit` | Frames the VS Code create/debug experience and the Operate handoff after a prompt version is ready. |
+| `microsoft/azure-skills` | Connects Copilot guidance to Foundry observe, CI/CD, regression, and trace follow-through. |
+| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | Reference for the Foundry Observe/Optimize/Protect loop: traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
 
 ## Journey you will exercise
 

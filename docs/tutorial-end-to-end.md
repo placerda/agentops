@@ -76,13 +76,13 @@ not a self-contained AgentOps-only workflow. Use this repository set for a
 coherent path that connects the official Foundry product surfaces, the CI/CD
 evaluation runner, skill guidance, and AgentOps readiness evidence.
 
-| Repository | Tutorial reference | Role in the combined story |
-|---|---|---|
-| `Azure/agentops` | `placerda/agentops` | Repo-side release readiness, Doctor, Cockpit, and evidence layer. |
-| `microsoft/ai-agent-evals` | `placerda/ai-agent-evals` | Foundry-native CI/CD evaluation runner for prompt-agent gates and compare links. |
-| `microsoft/foundry-toolkit` | `placerda/foundry-toolkit` | VS Code create/debug/deploy surface for the Operate/readiness handoff. |
-| `microsoft/azure-skills` | `placerda/azure-skills` | Microsoft Foundry skill guidance for observe, CI/CD monitoring, regression, and trace follow-through. |
-| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | `2026-04-aie-europe` branch | Reference path for Foundry Observe/Optimize/Protect: traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
+| Repository | Role in the combined story |
+|---|---|
+| `Azure/agentops` | Repo-side release readiness, Doctor, Cockpit, and evidence layer. |
+| `microsoft/ai-agent-evals` | Foundry-native CI/CD evaluation runner for prompt-agent gates and compare links. |
+| `microsoft/foundry-toolkit` | VS Code create/debug/deploy surface for the Operate/readiness handoff. |
+| `microsoft/azure-skills` | Microsoft Foundry skill guidance for observe, CI/CD monitoring, regression, and trace follow-through. |
+| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | Reference path for Foundry Observe/Optimize/Protect: traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
 
 ## 1. Create the Travel Agent target
 

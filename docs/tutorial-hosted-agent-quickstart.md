@@ -13,17 +13,16 @@ This path validates the AgentOps local route:
 ## Repository set used in this tutorial
 
 This tutorial intentionally connects the hosted-agent path to the Microsoft
-projects that make the Operate story complete. The repository set gives the
-tutorial stable references while the official Foundry extension, Azure services,
-and AgentOps workflow remain the actual runtime path.
+projects that make the Operate story complete. The official Foundry extension,
+Azure services, and AgentOps workflow remain the actual runtime path.
 
-| Repository | Tutorial reference | Role in the journey |
-|---|---|---|
-| `Azure/agentops` | `placerda/agentops` | Provides endpoint evaluation, thresholds, `results.json`, Doctor, Cockpit, and evidence. |
-| `microsoft/ai-agent-evals` | `placerda/ai-agent-evals` | Provides the Foundry prompt-agent gate contract used as contrast for why hosted endpoints use AgentOps local eval. |
-| `microsoft/foundry-toolkit` | `placerda/foundry-toolkit` | Frames the Hosted Agent create/debug/deploy flow and the Operate handoff in VS Code. |
-| `microsoft/azure-skills` | `placerda/azure-skills` | Shows where the Microsoft Foundry skill can guide hosted-agent CI/CD, observe, and trace-regression follow-through. |
-| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | `2026-04-aie-europe` branch | Reference for the Foundry Observe/Optimize/Protect loop: OpenTelemetry traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
+| Repository | Role in the journey |
+|---|---|
+| `Azure/agentops` | Provides endpoint evaluation, thresholds, `results.json`, Doctor, Cockpit, and evidence. |
+| `microsoft/ai-agent-evals` | Provides the Foundry prompt-agent gate contract used as contrast for why hosted endpoints use AgentOps local eval. |
+| `microsoft/foundry-toolkit` | Frames the Hosted Agent create/debug/deploy flow and the Operate handoff in VS Code. |
+| `microsoft/azure-skills` | Shows where the Microsoft Foundry skill can guide hosted-agent CI/CD, observe, and trace-regression follow-through. |
+| `Azure-Samples/microsoft-foundry-e2e-agent-observability-workshop` | Reference for the Foundry Observe/Optimize/Protect loop: OpenTelemetry traces, App Insights, Ask AI, evaluations, and red-team follow-through. |
 
 Unlike the Prompt Agent quickstart, this endpoint tutorial does not point the
 generated PR workflow at `ai-agent-evals`. Hosted and HTTP agents are evaluated
