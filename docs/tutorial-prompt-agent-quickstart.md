@@ -213,7 +213,6 @@ This creates:
 agentops.yaml
 .agentops/
 .azure/dev/.env
-.github/skills/
 ```
 
 `agentops.yaml` should stay small:
@@ -226,6 +225,8 @@ dataset: .agentops/data/travel-smoke.jsonl
 
 The Foundry project endpoint lives in `.azure/dev/.env`, not in source control.
 If you force an App Insights connection string later, it is saved there too.
+The Copilot skills are installed later, in step 7, with
+`agentops skills install --platform copilot`.
 
 ## 6. Check the selected eval runner
 
