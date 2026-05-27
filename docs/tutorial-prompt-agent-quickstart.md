@@ -404,12 +404,29 @@ git push -u origin main
 gh workflow run agentops-pr.yml --ref main
 Start-Sleep -Seconds 10
 $runId = gh run list --workflow agentops-pr.yml --branch main --limit 1 --json databaseId --jq '.[0].databaseId'
+gh run view $runId --web
 gh run watch $runId --exit-status
 ```
 
 If the commit already exists, skip the `git commit` line and just push/run the
 workflow. This manual `workflow_dispatch` run is the green baseline you will use
 for comparison.
+
+Use the browser view as part of the lesson, not only the terminal. In GitHub,
+open the repository, go to **Actions** -> **AgentOps PR**, open the latest run,
+and click **AgentOps eval (PR gate)**. The terminal tells you pass/fail; the
+Actions page shows which step failed, the summary table, and the link back to
+Foundry.
+
+Do not continue to the intentional regression until this baseline run is green.
+If the failed step is **Run official AI Agent Evaluation** and the log says the
+principal `lacks the required data action`
+`Microsoft.CognitiveServices/accounts/AIServices/agents/read`, the workflow
+authenticated to Azure but the GitHub OIDC app/service principal cannot read
+Foundry agents yet. Ask the Azure/Foundry admin to grant that principal
+**Foundry User** access at the Foundry project scope, or at the Foundry resource
+scope if that is how your environment is managed, then rerun the same workflow.
+Reader alone is not enough for this data-plane call.
 
 1. In Foundry, edit the `travel-agent` instructions to this intentionally bad
    version:
